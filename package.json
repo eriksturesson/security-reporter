@@ -1,0 +1,72 @@
+{
+  "name": "security-reporter",
+  "version": "1.0.0",
+  "description": "Security and quality reporter for Node.js projects. Scans for vulnerabilities, secrets, outdated dependencies, and generates comprehensive reports (console, Markdown, PDF).",
+  "license": "MIT",
+  "keywords": [
+    "security",
+    "security-report",
+    "security-reporter",
+    "owasp",
+    "npm-audit",
+    "secret-scanning",
+    "vulnerability-scanner",
+    "code-quality",
+    "dependencies",
+    "reporter",
+    "cli",
+    "nodejs",
+    "typescript",
+    "ci-cd"
+  ],
+  "author": {
+    "name": "Erik Sturesson",
+    "email": "hej@eriksturesson.se",
+    "url": "https://eriksturesson.se"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/eriksturesson/security-reporter"
+  },
+  "bugs": {
+    "email": "hej@eriksturesson.se",
+    "url": "https://github.com/eriksturesson/security-reporter/issues"
+  },
+  "engines": {
+    "node": ">=16"
+  },
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "security-reporter": "./dist/cli.js",
+    "sr": "./dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "CHANGELOG.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "prepare": "npm run build",
+    "security-report": "node ./dist/cli.js",
+    "start": "npm run security-report",
+    "dev": "ts-node src/cli.ts",
+    "test": "ts-node src/test/test.ts",
+    "lint": "echo \"No linter configured yet\" && exit 0"
+  },
+  "dependencies": {
+    "chalk": "^4.1.2",
+    "commander": "^11.1.0",
+    "dotenv": "^16.5.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.19.8",
+    "depcheck": "^1.4.7",
+    "ts-node": "^10.9.1",
+    "typescript": "^5.3.0"
+  },
+  "exports": {
+    ".": "./dist/index.js"
+  }
+}
