@@ -16,6 +16,9 @@ export interface SecurityConfig {
   checkSecrets?: boolean;
   allowedLicenses?: string[];
   ignoreVulnerabilities?: string[];
+  publishDryRun?: boolean;
+  generateSbom?: boolean;
+  checkRegistry?: boolean;
 }
 
 export interface QualityConfig {

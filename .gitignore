@@ -20,6 +20,9 @@ yarn-error.log*
 Thumbs.db
 desktop.ini
 
+# Reports directory (may contain sensitive output)
+reports/
+
 # TypeScript
 *.tsbuildinfo
 

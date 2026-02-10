@@ -1,4 +1,48 @@
-﻿# 🛡️ Security Reporter
+﻿# Security Reporter — Quick Install & Run
+
+Security Reporter is a local CLI tool that scans a repository for common security and quality issues and writes human- and machine-readable reports to `reports/`.
+
+Quick facts:
+
+- Runs entirely locally by default; network checks are opt‑in.
+- Reports are written to the `reports/` directory (gitignored by default).
+- The project is currently `private` to prevent accidental publishing.
+
+Install (local/test):
+
+```bash
+# Install dev dependency
+npm install --save-dev .
+
+# Or run directly with npx from the repo root
+npx ./dist/cli.js
+```
+
+Run the scan:
+
+```bash
+npm run report
+# or
+security-reporter
+```
+
+Output:
+
+- `reports/security-report.json` (JSON report)
+- `reports/security-report.html` (human-readable HTML)
+- `reports/sbom-npm-ls.json` (optional, when enabled)
+
+Security notes (short):
+
+- The package is marked `private: true` to avoid accidental publish to npm.
+- Install-time lifecycle scripts were removed to reduce risk; review `package.json` for any remaining scripts.
+- If you must publish this package to npm, follow the public checklist in `README_PUBLIC.md` and remove `private` only when ready.
+
+Want a public-ready guide or contribution guidelines? See `README_PUBLIC.md`, `CONTRIBUTING.md`, and `SECURITY.md`.
+
+License: MIT © Erik Sturesson
+
+# 🛡️ Security Reporter
 
 > Security and quality reporter for Node.js projects
 
@@ -367,6 +411,42 @@ MIT © Erik Sturesson
 - [GitHub Repository](https://github.com/eriksturesson/repo-guardian)
 - [npm Package](https://www.npmjs.com/package/repo-guardian)
 - [Issue Tracker](https://github.com/eriksturesson/repo-guardian/issues)
+
+## Reports and Secure Sharing
+
+By default `security-reporter` writes generated artifacts to a local `reports/` directory in the project root. This folder is added to `.gitignore` by default to avoid accidentally committing potentially sensitive information (vulnerability details, file paths, or traces of secrets).
+
+Recommended handling of `reports/`:
+
+- Keep `reports/` in `.gitignore` (default behavior).
+- If you need to share a report, publish it as a CI artifact (GitHub Actions / GitLab artifacts) or upload it to a secured storage (private S3/Blob storage) and share a link.
+- Avoid committing reports to the repo history — use release artifacts or encrypted storage when long-term archiving is required.
+
+Opt-in features and how to enable them (OWASP-aligned):
+
+- `publishDryRun` (boolean) — run `npm pack --dry-run` to validate what would be published. Enable via `.securityrc.json` under `security.publishDryRun`.
+- `generateSbom` (boolean) — generate a basic SBOM via `npm ls --all --json` and write it to `reports/sbom-npm-ls.json`. Enable via `security.generateSbom`.
+- `checkRegistry` (boolean) — optionally query the npm registry for the package name to surface maintainer/download metadata. Enable via `security.checkRegistry`.
+
+Example `.securityrc.json` snippet to opt-in:
+
+```json
+{
+  "security": {
+    "auditLevel": "moderate",
+    "checkSecrets": true,
+    "publishDryRun": false,
+    "generateSbom": false,
+    "checkRegistry": false
+  }
+}
+```
+
+OWASP alignment
+
+- This tool is designed to follow the OWASP NPM Security Cheat Sheet guidance: avoid pushing secrets, use lockfiles, run SCA scans, produce SBOMs, and validate publish contents before release. The checks implemented map to the condensed OWASP checklist (publish safety, lockfile, script safety, SCA/audit, SBOM guidance, registry checks).
+
+If you want, I can also add a small GitHub Actions workflow template that runs the report on push and uploads `reports/security-report.json` as an artifact (recommended for secure sharing).
 
 ## 💬 Feedback
 

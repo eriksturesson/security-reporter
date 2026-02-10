@@ -4,6 +4,13 @@ import { ValidationReport, CheckResult, CheckStatus } from "../interfaces/Types"
  * Format and display validation report in terminal with beautiful output
  */
 export const reportToTerminal = (report: ValidationReport): void => {
+  const professional =
+    process.env.SECURITY_REPORT_PROFESSIONAL === "1" || process.env.SECURITY_REPORT_PROFESSIONAL === "true";
+  const showDetails =
+    process.env.SECURITY_REPORT_SHOW_DETAILS === "1" || process.env.SECURITY_REPORT_SHOW_DETAILS === "true";
+
+  const iconOrText = (icon: string, text: string) => (professional ? text : icon);
+
   const width = 80;
   const line = "═".repeat(width);
   const thinLine = "─".repeat(width);
@@ -27,37 +34,68 @@ export const reportToTerminal = (report: ValidationReport): void => {
 
   // Critical issues (show first and prominent)
   if (critical.length > 0) {
-    console.log("🔴 CRITICAL SECURITY ISSUES\n");
-    critical.forEach((check) => displayCheckDetailed(check));
+    console.log(`${professional ? "CRITICAL SECURITY ISSUES" : "🔴 CRITICAL SECURITY ISSUES"}\n`);
+    critical.forEach((check) => displayCheckDetailed(check, { professional, showDetails }));
     console.log("");
   }
 
   // Errors
   if (errors.length > 0) {
-    console.log("❌ ERRORS\n");
-    errors.forEach((check) => displayCheckDetailed(check));
+    console.log(`${professional ? "ERRORS" : "❌ ERRORS"}\n`);
+    errors.forEach((check) => displayCheckDetailed(check, { professional, showDetails }));
     console.log("");
   }
 
   // Warnings
   if (warnings.length > 0) {
-    console.log("⚠️  WARNINGS\n");
-    warnings.forEach((check) => displayCheckCompact(check));
+    console.log(`${professional ? "WARNINGS" : "⚠️  WARNINGS"}\n`);
+    warnings.forEach((check) => displayCheckCompact(check, { professional, showDetails }));
     console.log("");
   }
 
   // Passed checks (compact summary)
   if (passed.length > 0) {
     console.log("✅ PASSED CHECKS\n");
-    passed.forEach((check) => {
-      console.log(`  ${getStatusIcon(check.status)} ${check.name}`);
-    });
+    // Dynamically compute columns to fit the terminal width and render as table-like rows
+    const items = passed.map((c) => `${getStatusIcon(c.status)} ${c.name}`);
+    const indent = 2; // left padding
+    const available = Math.max(20, width - indent - 2);
+    const maxLen = items.reduce((m, it) => Math.max(m, it.length), 0);
+    const colWidth = Math.max(10, maxLen + 4);
+    const cols = Math.max(1, Math.floor(available / colWidth));
+    const rows = Math.ceil(items.length / cols);
+
+    for (let r = 0; r < rows; r++) {
+      const rowItems: string[] = [];
+      for (let c = 0; c < cols; c++) {
+        const idx = c * rows + r; // column-major arrangement for balanced columns
+        if (idx < items.length) {
+          rowItems.push(items[idx].padEnd(colWidth));
+        }
+      }
+      console.log(`  ${rowItems.join("")}`.trimRight());
+    }
+
     console.log("");
   }
 
-  // Skipped checks (very compact)
+  // Skipped checks (show what was skipped and why)
   if (skipped.length > 0) {
-    console.log("⏭️  SKIPPED (" + skipped.length + " checks)\n");
+    console.log(`${professional ? `SKIPPED (${skipped.length} checks)` : `⏭️  SKIPPED (${skipped.length} checks)`}\n`);
+    skipped.forEach((check) => {
+      if (professional) {
+        console.log(`  SKIPPED: ${check.name}: ${check.message}`);
+      } else {
+        console.log(`  ⏭️  ${check.name}: ${check.message}`);
+      }
+      // Show suggestions for skipped checks too (only in detailed mode)
+      if ((!professional || showDetails) && check.suggestions && check.suggestions.length > 0) {
+        check.suggestions.forEach((suggestion) => {
+          console.log(`     ${professional ? "-" : "💡"} ${suggestion}`);
+        });
+      }
+    });
+    console.log("");
   }
 
   // Summary box
@@ -65,28 +103,61 @@ export const reportToTerminal = (report: ValidationReport): void => {
   console.log(centerText("📊 SUMMARY", width));
   console.log(thinLine);
 
-  const summaryTable = [
-    { label: "Total Checks", value: report.summary.total, icon: "📋" },
-    { label: "Passed", value: report.summary.passed, icon: "✅" },
-    { label: "Warnings", value: report.summary.warnings, icon: "⚠️ " },
-    { label: "Failed", value: report.summary.failed, icon: "❌" },
-    { label: "Skipped", value: report.summary.skipped, icon: "⏭️ " },
+  // Build summary items and include additional metrics when available
+  const secretsCheck = report.checks.find((c) => c.name.toLowerCase().includes("secrets"));
+  const patternsChecked =
+    secretsCheck && typeof secretsCheck.details === "object"
+      ? secretsCheck.details.patternsChecked || secretsCheck.details.filesScanned || undefined
+      : undefined;
+  const filesScanned =
+    secretsCheck && typeof secretsCheck.details === "object" ? secretsCheck.details.filesScanned : undefined;
+
+  const summaryItems: Array<{ label: string; value: string }> = [
+    { label: "Total checks", value: String(report.summary.total) },
+    { label: "Passed", value: String(report.summary.passed) },
+    { label: "Warnings", value: String(report.summary.warnings) },
+    { label: "Failed", value: String(report.summary.failed) },
+    { label: "Skipped", value: String(report.summary.skipped) },
   ];
 
-  summaryTable.forEach(({ label, value, icon }) => {
-    const paddedLabel = label.padEnd(20);
-    console.log(`  ${icon}  ${paddedLabel} ${value}`);
-  });
+  if (typeof filesScanned === "number") {
+    summaryItems.push({ label: "Files scanned", value: String(filesScanned) });
+  }
+  if (typeof patternsChecked === "number") {
+    summaryItems.push({ label: "Patterns checked", value: String(patternsChecked) });
+  }
+
+  // Render two columns per row to use horizontal space better
+  const colWidth = Math.floor((width - 6) / 2); // leave small margins
+  for (let i = 0; i < summaryItems.length; i += 2) {
+    const left = summaryItems[i];
+    const right = summaryItems[i + 1];
+    const leftText = `${left.label}: ${left.value}`.padEnd(colWidth);
+    const rightText = right ? `${right.label}: ${right.value}` : "";
+    const lineOut = `  ${leftText}${rightText}`.trimRight();
+    console.log(lineOut);
+  }
 
   console.log(line);
 
   // Overall status
-  const statusDisplay = getOverallStatusDisplay(report.overallStatus);
-  console.log(`\n${centerText(statusDisplay.text, width)}\n`);
+  // Overall status (simpler text in professional mode)
+  if (professional) {
+    const text =
+      report.overallStatus === "fail"
+        ? "OVERALL STATUS: FAILED - Action Required"
+        : report.overallStatus === "warn"
+          ? "OVERALL STATUS: WARNING - Review Recommended"
+          : "OVERALL STATUS: PASSED - All Good";
+    console.log(`\n${centerText(text, width)}\n`);
+  } else {
+    const statusDisplay = getOverallStatusDisplay(report.overallStatus);
+    console.log(`\n${centerText(statusDisplay.text, width)}\n`);
+  }
 
   // Action items if there are issues
   if (critical.length > 0 || errors.length > 0) {
-    console.log("🔧 RECOMMENDED ACTIONS:\n");
+    console.log(`${professional ? "RECOMMENDED ACTIONS:" : "🔧 RECOMMENDED ACTIONS:"}\n`);
     const actions = new Set<string>();
 
     [...critical, ...errors].forEach((check) => {
@@ -105,27 +176,39 @@ export const reportToTerminal = (report: ValidationReport): void => {
   }
 
   // CI/CD hint
-  if (report.overallStatus === "fail") {
-    console.log("💡 Tip: Fix critical and error issues before deploying to production\n");
-  } else if (report.overallStatus === "warn") {
-    console.log("💡 Tip: Consider addressing warnings to improve code quality\n");
-  } else {
-    console.log("🎉 Great job! No critical issues found\n");
+  if (!professional) {
+    if (report.overallStatus === "fail") {
+      console.log("💡 Tip: Fix critical and error issues before deploying to production\n");
+    } else if (report.overallStatus === "warn") {
+      console.log("💡 Tip: Consider addressing warnings to improve code quality\n");
+    }
   }
 };
 
 /**
  * Display check with full details (for critical/errors)
  */
-const displayCheckDetailed = (check: CheckResult): void => {
-  const icon = getSeverityIcon(check.severity);
-  const badge = getSeverityBadge(check.severity);
+const displayCheckDetailed = (
+  check: CheckResult,
+  options?: { professional?: boolean; showDetails?: boolean },
+): void => {
+  const professional = options?.professional ?? false;
+  const showDetails = options?.showDetails ?? false;
 
-  console.log(`  ${icon} ${check.name.toUpperCase()} ${badge}`);
+  if (professional && !showDetails) {
+    // Minimal single-line summary for managers
+    console.log(`  [${check.severity.toUpperCase()}] ${check.name}: ${check.message}`);
+    return;
+  }
+
+  const icon = professional ? "" : getSeverityIcon(check.severity);
+  const badge = professional ? `[${check.severity.toUpperCase()}]` : getSeverityBadge(check.severity);
+
+  console.log(`  ${icon} ${check.name.toUpperCase()} ${badge}`.trim());
   console.log(`     ├─ Status: ${check.status.toUpperCase()}`);
   console.log(`     ├─ Message: ${check.message}`);
 
-  if (check.details) {
+  if (check.details && (!professional || showDetails)) {
     console.log(`     └─ Details:`);
     if (Array.isArray(check.details)) {
       check.details.slice(0, 3).forEach((detail, i) => {
@@ -146,8 +229,8 @@ const displayCheckDetailed = (check: CheckResult): void => {
     }
   }
 
-  if (check.suggestions && check.suggestions.length > 0) {
-    console.log(`     💡 Suggestions:`);
+  if (check.suggestions && check.suggestions.length > 0 && (!professional || showDetails)) {
+    console.log(`     ${professional ? "Suggestions:" : "💡 Suggestions:"}`);
     check.suggestions.slice(0, 2).forEach((suggestion) => {
       console.log(`        • ${suggestion}`);
     });
@@ -159,12 +242,14 @@ const displayCheckDetailed = (check: CheckResult): void => {
 /**
  * Display check compactly (for warnings)
  */
-const displayCheckCompact = (check: CheckResult): void => {
-  const icon = getStatusIcon(check.status);
-  console.log(`  ${icon} ${check.name}: ${check.message}`);
+const displayCheckCompact = (check: CheckResult, options?: { professional?: boolean; showDetails?: boolean }): void => {
+  const professional = options?.professional ?? false;
+  const showDetails = options?.showDetails ?? false;
+  const icon = professional ? "" : getStatusIcon(check.status);
+  console.log(`  ${icon} ${check.name}: ${check.message}`.trim());
 
-  if (check.suggestions && check.suggestions.length > 0) {
-    console.log(`     💡 ${check.suggestions[0]}`);
+  if (check.suggestions && check.suggestions.length > 0 && (!professional || showDetails)) {
+    console.log(`     ${professional ? "-" : "💡"} ${check.suggestions[0]}`);
   }
 };
 

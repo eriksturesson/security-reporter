@@ -1,5 +1,5 @@
 {
-  "name": "security-reporter",
+  "name": "@eriksturesson/security-reporter",
   "version": "1.0.0",
   "description": "Security and quality reporter for Node.js projects. Scans for vulnerabilities, secrets, outdated dependencies, and generates comprehensive reports (console, Markdown, PDF).",
   "license": "MIT",
@@ -46,13 +46,16 @@
     "README.md",
     "CHANGELOG.md"
   ],
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com/"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "prepare": "npm run build",
     "security-report": "node ./dist/cli.js",
+    "report": "npm run security-report",
     "start": "npm run security-report",
     "dev": "ts-node src/cli.ts",
-    "test": "ts-node src/test/test.ts",
+    "test": "vitest",
     "lint": "echo \"No linter configured yet\" && exit 0"
   },
   "dependencies": {
@@ -64,7 +67,8 @@
     "@types/node": "^22.19.8",
     "depcheck": "^1.4.7",
     "ts-node": "^10.9.1",
-    "typescript": "^5.3.0"
+    "typescript": "^5.3.0",
+    "vitest": "^1.6.1"
   },
   "exports": {
     ".": "./dist/index.js"

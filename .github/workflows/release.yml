@@ -1,0 +1,59 @@
+name: Release
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  build-and-publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "18"
+          cache: "npm"
+          registry-url: "https://npm.pkg.github.com"
+          scope: "@eriksturesson"
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Build
+        run: npm run build --if-present
+
+      - name: Run tests
+        run: npm test --if-present
+
+      - name: Generate CycloneDX SBOM
+        run: |
+          # Uses Anchore Syft docker image to generate CycloneDX XML SBOM
+          docker run --rm -v "${{ github.workspace }}:/workdir" -w /workdir anchore/syft:latest -o cyclonedx-xml=sbom.xml .
+
+      - name: Upload SBOM to release
+        if: github.event_name == 'release'
+        uses: actions/upload-release-asset@v1
+        with:
+          upload_url: ${{ github.event.release.upload_url }}
+          asset_path: sbom.xml
+          asset_name: sbom-${{ github.sha }}.xml
+          asset_content_type: application/xml
+
+      - name: Configure npm auth for GitHub Packages
+        run: |
+          echo "@eriksturesson:registry=https://npm.pkg.github.com" > ~/.npmrc
+          echo "//npm.pkg.github.com/:_authToken=${{ secrets.GITHUB_TOKEN }}" >> ~/.npmrc
+
+      - name: Publish to GitHub Packages
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          npm publish --registry https://npm.pkg.github.com

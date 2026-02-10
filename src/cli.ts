@@ -3,6 +3,7 @@
 import { program } from "commander";
 import { runValidation } from "./core/validators";
 import { reportToTerminal, reportToJson, reportToMarkdown, getExitCode } from "./core/reporter";
+import { reportToHtml, saveHtmlReport } from "./core/html-reporter";
 import { GuardianConfig } from "./interfaces/Types";
 import * as fs from "fs";
 import * as path from "path";
@@ -42,7 +43,7 @@ program
   .version("1.0.0")
   .option("-c, --config <path>", "Path to config file")
   .option("-p, --project-type <type>", "Project type: frontend, backend, fullstack")
-  .option("-f, --format <format>", "Output format: terminal, json, markdown, all", "terminal")
+  .option("-f, --format <format>", "Output format: terminal, json, markdown, html, all", "json")
   .option("-o, --output <file>", "Output file (for json/markdown format)")
   .option("--strict", "Exit with code 1 on warnings")
   .option("--no-security", "Skip security checks")
@@ -71,6 +72,16 @@ program
       // Output report based on format
       const format = options.format.toLowerCase();
 
+      // Ensure reports directory exists for default outputs
+      const reportsDir = path.join(process.cwd(), "reports");
+      if (!fs.existsSync(reportsDir)) {
+        try {
+          fs.mkdirSync(reportsDir, { recursive: true });
+        } catch (err) {
+          // ignore - will fallback to CWD writes
+        }
+      }
+
       if (format === "json" || format === "all") {
         const json = reportToJson(report);
 
@@ -78,15 +89,38 @@ program
           const outputPath = options.output.endsWith(".json") ? options.output : `${options.output}.json`;
           fs.writeFileSync(outputPath, json);
           console.log(`\n✅ JSON report saved to ${outputPath}`);
-        } else if (format === "json") {
-          console.log(json);
+        } else {
+          // Default to saving JSON to reports/security-report.json for machine-readable output
+          const defaultJsonPath = path.join(reportsDir, `security-report.json`);
+          fs.writeFileSync(defaultJsonPath, json);
+          console.log(`\n✅ JSON report saved to ${defaultJsonPath}`);
+
+          // Also generate HTML alongside JSON for default runs
+          try {
+            const defaultHtmlPath = path.join(reportsDir, `security-report.html`);
+            const savedPath = saveHtmlReport(report, defaultHtmlPath);
+            console.log(`✅ HTML report saved to ${savedPath}`);
+
+            // Try to generate PDF from HTML if puppeteer is available
+            try {
+              // dynamic import to avoid hard dependency
+              const { savePdfFromHtml } = await import("./core/pdf-reporter");
+              const pdfPath = path.join(reportsDir, `security-report.pdf`);
+              const savedPdf = await savePdfFromHtml(savedPath, pdfPath);
+              console.log(`✅ PDF report saved to ${savedPdf}`);
+            } catch (pdfErr) {
+              console.log("ℹ️  PDF generation skipped (install 'puppeteer' to enable)");
+            }
+          } catch (e) {
+            // ignore HTML generation errors here
+          }
         }
       }
 
       if (format === "markdown" || format === "all") {
         const markdown = reportToMarkdown(report);
 
-        const outputPath = options.output || `security-report-${new Date().toISOString().split("T")[0]}.md`;
+        const outputPath = options.output ? options.output : path.join(reportsDir, `security-report.md`);
         const mdPath = outputPath.endsWith(".md") ? outputPath : `${outputPath}.md`;
 
         fs.writeFileSync(mdPath, markdown);
@@ -97,6 +131,27 @@ program
           console.log("\n💡 To convert to PDF, install markdown-pdf: npm install -g markdown-pdf");
           console.log(`   Then run: markdown-pdf ${mdPath}`);
         }
+      }
+
+      if (format === "html" || format === "all") {
+        const outputPath = options.output ? options.output : path.join(reportsDir, `security-report.html`);
+        const htmlPath = outputPath.endsWith(".html") ? outputPath : `${outputPath}.html`;
+
+        const savedPath = saveHtmlReport(report, htmlPath);
+        console.log(`\n✅ HTML report saved to ${savedPath}`);
+        console.log(`   Open in browser: file://${path.resolve(savedPath)}`);
+      }
+
+      // Always show terminal report for live feedback
+      try {
+        reportToTerminal(report);
+      } catch (e) {
+        // ignore terminal rendering errors
+      }
+
+      // Notify about reports directory when files are generated
+      if (fs.existsSync(reportsDir)) {
+        console.log(`\n✅ Specific reports generated to ${reportsDir}`);
       }
 
       if (format === "terminal" || format === "all") {
