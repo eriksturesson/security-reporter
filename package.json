@@ -1,5 +1,5 @@
 {
-  "name": "@eriksturesson/security-reporter",
+  "name": "security-reporter",
   "version": "1.0.0",
   "description": "Security and quality reporter for Node.js projects. Scans for vulnerabilities, secrets, outdated dependencies, and generates comprehensive reports (console, Markdown, PDF).",
   "license": "MIT",
@@ -46,9 +46,7 @@
     "README.md",
     "CHANGELOG.md"
   ],
-  "publishConfig": {
-    "registry": "https://npm.pkg.github.com/"
-  },
+  "homepage": "https://github.com/eriksturesson/security-reporter",
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "security-report": "node ./dist/cli.js",
@@ -66,6 +64,7 @@
   "devDependencies": {
     "@types/node": "^22.19.8",
     "depcheck": "^1.4.7",
+    "puppeteer-core": "^24.37.2",
     "ts-node": "^10.9.1",
     "typescript": "^5.3.0",
     "vitest": "^4.0.18"

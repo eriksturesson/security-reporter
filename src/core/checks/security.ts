@@ -1,10 +1,7 @@
-import { exec } from "child_process";
-import { promisify } from "util";
+import { spawn } from "child_process";
 import { SecurityConfig, CheckResult, ProjectType } from "../../interfaces/Types";
 import * as fs from "fs";
 import * as path from "path";
-
-const execAsync = promisify(exec);
 
 /**
  * Run all security-related checks
@@ -41,7 +38,8 @@ const checkPackagePublishSafety = async (): Promise<CheckResult> => {
       };
     }
 
-    const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf-8"));
+    const pkgContent = fs.readFileSync(pkgPath, "utf-8");
+    const pkg = safeParseJSON(pkgContent, "package.json");
 
     const suggestions: string[] = [];
     if (pkg.private === true) {
@@ -141,7 +139,8 @@ const checkNpmScripts = async (): Promise<CheckResult> => {
       };
     }
 
-    const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf-8"));
+    const pkgContent = fs.readFileSync(pkgPath, "utf-8");
+    const pkg = safeParseJSON(pkgContent, "package.json");
     const scripts = pkg.scripts || {};
 
     const risky = ["preinstall", "install", "postinstall", "prepare"].filter((s) => scripts[s]);
@@ -179,12 +178,17 @@ const checkNpmScripts = async (): Promise<CheckResult> => {
 };
 
 /**
- * Run npm audit and parse results
+ * FIX #1: Run npm audit with spawn instead of exec for security
+ * FIXED: Command injection vulnerability
  */
 const checkNpmAudit = async (config: SecurityConfig): Promise<CheckResult> => {
   try {
-    const { stdout } = await execAsync("npm audit --json");
-    const audit = JSON.parse(stdout);
+    const result = await spawnCommand("npm", ["audit", "--json"], {
+      timeout: 30000,
+      maxBuffer: 10 * 1024 * 1024,
+    });
+
+    const audit = JSON.parse(result.stdout);
 
     const vulnerabilities = audit.metadata?.vulnerabilities || {};
     const total =
@@ -247,7 +251,8 @@ const checkNpmAudit = async (config: SecurityConfig): Promise<CheckResult> => {
 };
 
 /**
- * Check for common secrets patterns in code
+ * FIX #3: Check for common secrets patterns with SAFE regex patterns
+ * FIXED: ReDoS vulnerability by limiting length and using safer patterns
  */
 const checkSecrets = async (config: SecurityConfig): Promise<CheckResult> => {
   if (config.checkSecrets === false) {
@@ -259,27 +264,34 @@ const checkSecrets = async (config: SecurityConfig): Promise<CheckResult> => {
     };
   }
 
-  // Load patterns from config/patterns.json if present, otherwise fallback to built-in list
+  // FIX #3: Safe regex patterns with length limits to prevent ReDoS
   const loadPatterns = (): Array<{ name: string; pattern: RegExp }> => {
     const cfgPath = path.join(process.cwd(), "config", "patterns.json");
     if (fs.existsSync(cfgPath)) {
       try {
         const raw = fs.readFileSync(cfgPath, "utf-8");
-        const list = JSON.parse(raw) as Array<{ name: string; pattern: string; flags?: string }>;
+        const list = safeParseJSON(raw, "patterns.json") as Array<{
+          name: string;
+          pattern: string;
+          flags?: string;
+        }>;
         return list.map((p) => ({ name: p.name, pattern: new RegExp(p.pattern, p.flags || "i") }));
       } catch {
         // fallthrough to defaults
       }
     }
 
+    // SAFE patterns with length limits to prevent ReDoS
     const defaults: Array<{ name: string; pattern: RegExp }> = [
       { name: "AWS Access Key", pattern: /AKIA[0-9A-Z]{16}/i },
-      { name: "AWS Secret Key", pattern: /([0-9a-zA-Z/+]{40})/i },
-      { name: "Stripe Live Key", pattern: /sk_live_[0-9a-zA-Z]{24}/i },
+      { name: "AWS Secret Key", pattern: /aws_secret_access_key\s*[=:]\s*['"]?[A-Za-z0-9/+=]{40}['"]?/i },
+      { name: "Stripe Live Key", pattern: /sk_live_[0-9a-zA-Z]{24,99}/i },
       { name: "Google API Key", pattern: /AIza[0-9A-Za-z\-_]{35}/i },
       { name: "GitHub PAT", pattern: /ghp_[0-9a-zA-Z]{36}/i },
       { name: "GitHub PAT (alt)", pattern: /github_pat_[0-9a-zA-Z]{22}_[0-9a-zA-Z]{59}/i },
-      { name: "Bearer Token", pattern: /Bearer\s+[A-Za-z0-9\-._~+/]+=*/i },
+      // FIXED: Limited length to prevent ReDoS
+      { name: "Bearer Token", pattern: /Bearer\s+[A-Za-z0-9\-._~+/]{10,500}/i },
+      { name: "JWT Token", pattern: /eyJ[A-Za-z0-9_-]{10,500}\.[A-Za-z0-9_-]{10,500}\.[A-Za-z0-9_-]{10,500}/i },
     ];
 
     return defaults;
@@ -300,56 +312,51 @@ const checkSecrets = async (config: SecurityConfig): Promise<CheckResult> => {
     };
   }
 
+  // FIX #2: Safe directory scanning with path traversal protection
   const scanDirectory = (dir: string) => {
-    const files = fs.readdirSync(dir);
+    const normalizedDir = path.resolve(dir);
+    const projectRoot = path.resolve(process.cwd());
 
-    files.forEach((file) => {
-      const filePath = path.join(dir, file);
-      const stat = fs.statSync(filePath);
+    // FIX: Verify we're within project root
+    if (!normalizedDir.startsWith(projectRoot)) {
+      console.warn(`[Security] Attempted to scan outside project: ${dir}`);
+      return;
+    }
+
+    let entries;
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch (err) {
+      // Skip inaccessible directories
+      return;
+    }
+
+    entries.forEach((entry) => {
+      const filePath = path.join(dir, entry.name);
+      const resolvedPath = path.resolve(filePath);
+
+      // FIX: Skip symlinks to prevent traversal attacks
+      if (entry.isSymbolicLink()) {
+        return;
+      }
+
+      // FIX: Double-check resolved path is still within project
+      if (!resolvedPath.startsWith(projectRoot)) {
+        console.warn(`[Security] Skipping file outside project: ${filePath}`);
+        return;
+      }
 
       // Skip scanning our own core scanner files to avoid false positives
       if (excludeDirs.some((d) => filePath.startsWith(d))) {
         return;
       }
 
-      if (stat.isDirectory()) {
-        if (!file.startsWith(".") && file !== "node_modules") {
+      if (entry.isDirectory()) {
+        if (!entry.name.startsWith(".") && entry.name !== "node_modules") {
           scanDirectory(filePath);
         }
-      } else if (file.match(/\.(ts|js|jsx|tsx|json)$/)) {
-        const content = fs.readFileSync(filePath, "utf-8");
-        const lines = content.split(/\r?\n/);
-
-        patterns.forEach(({ name, pattern }) => {
-          lines.forEach((line, index) => {
-            if (pattern.test(line)) {
-              const trimmed = line.trim();
-              if (
-                !trimmed.startsWith("//") &&
-                !trimmed.startsWith("#") &&
-                !trimmed.startsWith("*") &&
-                !trimmed.includes("example") &&
-                !trimmed.includes("placeholder") &&
-                !trimmed.includes("TODO") &&
-                !trimmed.includes("FIXME")
-              ) {
-                // Detect if this line looks like a pattern/regex definition to avoid false positives
-                const isDefinition =
-                  /pattern\s*[:=]|new RegExp\(|const\s+patterns\b|let\s+patterns\b|var\s+patterns\b|\/.*\//.test(
-                    trimmed,
-                  );
-
-                foundSecrets.push({
-                  file: filePath.replace(process.cwd(), ""),
-                  type: name,
-                  line: index + 1,
-                  snippet: line.trim().slice(0, 200),
-                  isDefinition,
-                });
-              }
-            }
-          });
-        });
+      } else if (entry.name.match(/\.(ts|js|jsx|tsx|json)$/)) {
+        scanFile(filePath, patterns, foundSecrets);
       }
     });
   };
@@ -368,21 +375,24 @@ const checkSecrets = async (config: SecurityConfig): Promise<CheckResult> => {
           severity: "critical",
           message: `Found potential secrets in ${reals.length} locations (plus ${defs.length} possible pattern definitions)`,
           details: {
-            matches: reals,
-            possibleDefinitions: defs,
+            matches: reals.slice(0, 10), // Limit output
+            possibleDefinitions: defs.slice(0, 5),
+            totalMatches: reals.length,
+            totalDefinitions: defs.length,
           },
           suggestions: ["Remove hardcoded secrets", "Use environment variables", "Add files to .gitignore"],
         };
       }
 
-      // Only pattern definitions found — treat as warning/info to avoid false positives
+      // Only pattern definitions found
       return {
         name: "secrets scan",
         status: "warn",
         severity: "warning",
         message: `Only pattern/regex definitions found (${defs.length} matches) — possible false positives`,
         details: {
-          possibleDefinitions: defs,
+          possibleDefinitions: defs.slice(0, 5),
+          total: defs.length,
         },
         suggestions: [
           "Move pattern/regex definitions to a separate config file (e.g. config/patterns.json)",
@@ -396,6 +406,10 @@ const checkSecrets = async (config: SecurityConfig): Promise<CheckResult> => {
       status: "pass",
       severity: "info",
       message: "No hardcoded secrets found",
+      details: {
+        filesScanned: countFilesInDir(srcDir),
+        patternsChecked: patterns.length,
+      },
     };
   } catch (error: any) {
     return {
@@ -406,6 +420,85 @@ const checkSecrets = async (config: SecurityConfig): Promise<CheckResult> => {
       details: error.message,
     };
   }
+};
+
+/**
+ * Helper: Scan individual file for secrets with size limit
+ * FIX #15: Prevent memory issues by limiting file size
+ */
+const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
+
+const scanFile = (
+  filePath: string,
+  patterns: Array<{ name: string; pattern: RegExp }>,
+  foundSecrets: Array<{ file: string; type: string; line: number; snippet: string; isDefinition: boolean }>,
+) => {
+  try {
+    const stats = fs.statSync(filePath);
+
+    // FIX: Skip files that are too large
+    if (stats.size > MAX_FILE_SIZE) {
+      console.warn(`[Security] Skipping large file: ${filePath} (${stats.size} bytes)`);
+      return;
+    }
+
+    const content = fs.readFileSync(filePath, "utf-8");
+    const lines = content.split(/\r?\n/);
+
+    patterns.forEach(({ name, pattern }) => {
+      lines.forEach((line, index) => {
+        // Reset regex lastIndex to prevent issues with global flag
+        pattern.lastIndex = 0;
+
+        if (pattern.test(line)) {
+          const trimmed = line.trim();
+          if (
+            !trimmed.startsWith("//") &&
+            !trimmed.startsWith("#") &&
+            !trimmed.startsWith("*") &&
+            !trimmed.includes("example") &&
+            !trimmed.includes("placeholder") &&
+            !trimmed.includes("TODO") &&
+            !trimmed.includes("FIXME")
+          ) {
+            // Detect if this line looks like a pattern/regex definition to avoid false positives
+            const isDefinition =
+              /pattern\s*[:=]|new RegExp\(|const\s+patterns\b|let\s+patterns\b|var\s+patterns\b|\/.*\//.test(trimmed);
+
+            foundSecrets.push({
+              file: filePath.replace(process.cwd(), ""),
+              type: name,
+              line: index + 1,
+              snippet: line.trim().slice(0, 200),
+              isDefinition,
+            });
+          }
+        }
+      });
+    });
+  } catch (err) {
+    // Skip files that can't be read
+  }
+};
+
+/**
+ * Helper: Count files in directory
+ */
+const countFilesInDir = (dir: string): number => {
+  let count = 0;
+  try {
+    const entries = fs.readdirSync(dir, { withFileTypes: true });
+    entries.forEach((entry) => {
+      if (entry.isDirectory() && entry.name !== "node_modules" && !entry.name.startsWith(".")) {
+        count += countFilesInDir(path.join(dir, entry.name));
+      } else if (entry.isFile() && entry.name.match(/\.(ts|js|jsx|tsx|json)$/)) {
+        count++;
+      }
+    });
+  } catch (err) {
+    // Ignore errors
+  }
+  return count;
 };
 
 /**
@@ -449,8 +542,7 @@ const checkEnvFiles = async (projectType: ProjectType): Promise<CheckResult> => 
 };
 
 /**
- * FEATURE: Enhanced License Compliance Checker
- * Checks both package.json and LICENSE file, warns if they differ
+ * Enhanced License Compliance Checker
  */
 const checkLicenses = async (config: SecurityConfig): Promise<CheckResult> => {
   if (!config.allowedLicenses || config.allowedLicenses.length === 0) {
@@ -473,7 +565,8 @@ const checkLicenses = async (config: SecurityConfig): Promise<CheckResult> => {
     // 1. Check package.json license
     let pkgLicense: string | undefined;
     try {
-      const pkg = require(path.join(process.cwd(), "package.json"));
+      const pkgContent = fs.readFileSync(path.join(process.cwd(), "package.json"), "utf-8");
+      const pkg = safeParseJSON(pkgContent, "package.json");
       pkgLicense = pkg.license;
     } catch {
       issues.push("Could not read package.json");
@@ -639,13 +732,17 @@ const checkPublishDryRun = async (config: SecurityConfig): Promise<CheckResult> 
   }
 
   try {
-    const { stdout } = await execAsync("npm pack --dry-run");
+    const result = await spawnCommand("npm", ["pack", "--dry-run"], {
+      timeout: 30000,
+      maxBuffer: 10 * 1024 * 1024,
+    });
+
     return {
       name: "publish dry-run",
       status: "pass",
       severity: "info",
       message: "npm pack --dry-run completed",
-      details: stdout.slice(0, 8000),
+      details: result.stdout.slice(0, 8000),
       suggestions: ["Review pack output before publishing"],
     };
   } catch (error: any) {
@@ -672,11 +769,23 @@ const checkSbomGeneration = async (config: SecurityConfig): Promise<CheckResult>
 
   try {
     const reportsDir = path.join(process.cwd(), "reports");
-    if (!fs.existsSync(reportsDir)) fs.mkdirSync(reportsDir, { recursive: true });
 
-    const { stdout } = await execAsync("npm ls --all --json");
+    // FIX #7: Atomic directory creation without race condition
+    try {
+      fs.mkdirSync(reportsDir, { recursive: true });
+    } catch (err: any) {
+      if (err.code !== "EEXIST") {
+        throw err;
+      }
+    }
+
+    const result = await spawnCommand("npm", ["ls", "--all", "--json"], {
+      timeout: 30000,
+      maxBuffer: 10 * 1024 * 1024,
+    });
+
     const sbomPath = path.join(reportsDir, "sbom-npm-ls.json");
-    fs.writeFileSync(sbomPath, stdout, "utf-8");
+    fs.writeFileSync(sbomPath, result.stdout, "utf-8");
 
     return {
       name: "sbom",
@@ -698,6 +807,10 @@ const checkSbomGeneration = async (config: SecurityConfig): Promise<CheckResult>
   }
 };
 
+/**
+ * FIX #5: Use native fetch API with proper error handling
+ * FIXED: HTTPS without certificate validation
+ */
 const checkTyposquatting = async (config: SecurityConfig): Promise<CheckResult> => {
   if (!config.checkRegistry) {
     return {
@@ -719,8 +832,10 @@ const checkTyposquatting = async (config: SecurityConfig): Promise<CheckResult> 
       };
     }
 
-    const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf-8"));
+    const pkgContent = fs.readFileSync(pkgPath, "utf-8");
+    const pkg = safeParseJSON(pkgContent, "package.json");
     const name = pkg.name;
+
     if (!name) {
       return {
         name: "typosquatting",
@@ -731,35 +846,40 @@ const checkTyposquatting = async (config: SecurityConfig): Promise<CheckResult> 
     }
 
     const regUrl = `https://registry.npmjs.org/${encodeURIComponent(name)}`;
-    const https = require("https");
 
-    const info = await new Promise<any>((resolve, reject) => {
-      https
-        .get(regUrl, (res: any) => {
-          let data = "";
-          res.on("data", (chunk: any) => (data += chunk));
-          res.on("end", () => {
-            try {
-              resolve(JSON.parse(data));
-            } catch (e) {
-              reject(e);
-            }
-          });
-        })
-        .on("error", (err: any) => reject(err));
-    });
+    // FIX: Use fetch with proper timeout and headers
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5000);
 
-    const latest = info["dist-tags"]?.latest;
-    const maintainers = info.maintainers || [];
+    try {
+      const response = await fetch(regUrl, {
+        signal: controller.signal,
+        headers: {
+          "User-Agent": "security-reporter/1.0.0",
+        },
+      });
 
-    return {
-      name: "typosquatting",
-      status: "pass",
-      severity: "info",
-      message: `Registry lookup for ${name} succeeded`,
-      details: { latest, maintainersCount: maintainers.length },
-      suggestions: ["Verify maintainer list and download counts manually if package is new"],
-    };
+      clearTimeout(timeout);
+
+      if (!response.ok) {
+        throw new Error(`Registry returned ${response.status}`);
+      }
+
+      const info = (await response.json()) as any;
+      const latest = info["dist-tags"]?.latest;
+      const maintainers = info.maintainers || [];
+
+      return {
+        name: "typosquatting",
+        status: "pass",
+        severity: "info",
+        message: `Registry lookup for ${name} succeeded`,
+        details: { latest, maintainersCount: maintainers.length },
+        suggestions: ["Verify maintainer list and download counts manually if package is new"],
+      };
+    } finally {
+      clearTimeout(timeout);
+    }
   } catch (error: any) {
     return {
       name: "typosquatting",
@@ -770,4 +890,110 @@ const checkTyposquatting = async (config: SecurityConfig): Promise<CheckResult> 
       suggestions: ["Run registry checks locally or enable network access"],
     };
   }
+};
+
+// ============================================================================
+// UTILITY FUNCTIONS - Security Helpers
+// ============================================================================
+
+/**
+ * FIX #4: Safe JSON parsing with validation
+ * FIXED: Unsafe JSON.parse() from untrusted sources
+ */
+const MAX_JSON_SIZE = 1024 * 1024; // 1MB
+
+const safeParseJSON = (content: string, source: string): any => {
+  // Check size
+  if (content.length > MAX_JSON_SIZE) {
+    throw new Error(`${source} is too large (${content.length} bytes, max ${MAX_JSON_SIZE})`);
+  }
+
+  try {
+    const parsed = JSON.parse(content);
+
+    // Validate it's an object
+    if (typeof parsed !== "object" || parsed === null) {
+      throw new Error(`${source} must contain a JSON object`);
+    }
+
+    return parsed;
+  } catch (error: any) {
+    throw new Error(`Failed to parse ${source}: ${error.message}`);
+  }
+};
+
+/**
+ * FIX #1: Safe command spawning helper
+ * Replaces unsafe exec() with spawn()
+ */
+interface SpawnOptions {
+  timeout?: number;
+  maxBuffer?: number;
+}
+
+const spawnCommand = (
+  command: string,
+  args: string[],
+  options: SpawnOptions = {},
+): Promise<{ stdout: string; stderr: string; code: number }> => {
+  return new Promise((resolve, reject) => {
+    const { timeout = 30000, maxBuffer = 10 * 1024 * 1024 } = options;
+
+    const proc = spawn(command, args, {
+      cwd: process.cwd(),
+      env: process.env,
+    });
+
+    let stdout = "";
+    let stderr = "";
+    let killed = false;
+
+    // Set timeout
+    const timer = setTimeout(() => {
+      killed = true;
+      proc.kill();
+      reject(new Error(`Command timed out after ${timeout}ms`));
+    }, timeout);
+
+    proc.stdout.on("data", (data) => {
+      stdout += data.toString();
+      if (stdout.length > maxBuffer) {
+        killed = true;
+        proc.kill();
+        reject(new Error(`Output exceeded maxBuffer (${maxBuffer} bytes)`));
+      }
+    });
+
+    proc.stderr.on("data", (data) => {
+      stderr += data.toString();
+      if (stderr.length > maxBuffer) {
+        killed = true;
+        proc.kill();
+        reject(new Error(`Error output exceeded maxBuffer (${maxBuffer} bytes)`));
+      }
+    });
+
+    proc.on("close", (code) => {
+      clearTimeout(timer);
+      if (!killed) {
+        if (code === 0 || code === 1) {
+          // npm audit returns 1 if vulnerabilities found
+          resolve({ stdout, stderr, code: code || 0 });
+        } else {
+          const error: any = new Error(`Command failed with exit code ${code}`);
+          error.stdout = stdout;
+          error.stderr = stderr;
+          error.code = code;
+          reject(error);
+        }
+      }
+    });
+
+    proc.on("error", (err) => {
+      clearTimeout(timer);
+      if (!killed) {
+        reject(err);
+      }
+    });
+  });
 };

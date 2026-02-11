@@ -14,7 +14,7 @@ export const runTestChecks = async (config: TestConfig): Promise<CheckResult[]> 
 };
 
 /**
- * Check if tests are configured (placeholder)
+ * Check if tests are configured
  */
 const checkTestScript = async (config: TestConfig): Promise<CheckResult> => {
   if (config.run === false) {
@@ -32,7 +32,6 @@ const checkTestScript = async (config: TestConfig): Promise<CheckResult> => {
     const pkgRaw = await fs.promises.readFile(path.join(root, "package.json"), "utf8");
     pkg = JSON.parse(pkgRaw);
   } catch (e) {
-    // couldn't read package.json — return a warning
     return {
       name: "tests",
       status: "warn",
@@ -44,7 +43,7 @@ const checkTestScript = async (config: TestConfig): Promise<CheckResult> => {
 
   const hasTestScript = typeof pkg.scripts?.test === "string" && pkg.scripts.test.trim().length > 0;
 
-  // look for test files in common locations
+  // Look for test files in common locations
   const testFiles = await findTestFiles(root, ["test", "tests", "src"]);
 
   if (!hasTestScript && testFiles.length === 0) {
@@ -96,35 +95,91 @@ const findTestFiles = async (rootDir: string, dirs: string[]): Promise<string[]>
   return matches;
 };
 
-const walkAndCollect = async (dir: string, out: string[], re: RegExp) => {
+/**
+ * FIX #8: Add depth limit and cycle detection
+ * FIXED: Potential infinite loop in directory traversal
+ */
+const MAX_DEPTH = 10;
+const visitedInodes = new Set<string>();
+
+const walkAndCollect = async (dir: string, out: string[], re: RegExp, depth: number = 0) => {
+  // FIX: Check depth limit
+  if (depth > MAX_DEPTH) {
+    console.warn(`[Security] Max depth ${MAX_DEPTH} reached at ${dir}`);
+    return;
+  }
+
   let stat: fs.Stats;
   try {
     stat = await fs.promises.stat(dir);
   } catch (e) {
     return;
   }
+
   if (!stat.isDirectory()) return;
 
-  const entries = await fs.promises.readdir(dir);
+  // FIX: Detect circular symlinks with inode tracking
+  const inode = `${stat.dev}:${stat.ino}`;
+  if (visitedInodes.has(inode)) {
+    console.warn(`[Security] Circular link detected at ${dir}`);
+    return;
+  }
+  visitedInodes.add(inode);
+
+  // Validate we're still within project root
+  const projectRoot = path.resolve(root);
+  const currentDir = path.resolve(dir);
+  if (!currentDir.startsWith(projectRoot)) {
+    console.warn(`[Security] Directory outside project detected: ${dir}`);
+    return;
+  }
+
+  let entries;
+  try {
+    entries = await fs.promises.readdir(dir, { withFileTypes: true });
+  } catch (err) {
+    // Ignore inaccessible directories
+    return;
+  }
+
   for (const e of entries) {
-    const full = path.join(dir, e);
+    const full = path.join(dir, e.name);
+
+    // Skip symlinks to prevent traversal attacks
+    if (e.isSymbolicLink()) {
+      continue;
+    }
+
     try {
-      const s = await fs.promises.stat(full);
-      if (s.isDirectory()) {
-        // avoid node_modules
-        if (e === "node_modules") continue;
-        await walkAndCollect(full, out, re);
-      } else if (s.isFile()) {
-        if (re.test(e)) out.push(full.replace(root, "").replace(/^\\/, "").replace(/\\/g, "/"));
+      if (e.isDirectory()) {
+        // Avoid node_modules and hidden directories
+        if (e.name === "node_modules" || e.name.startsWith(".")) {
+          continue;
+        }
+
+        // Recurse with incremented depth
+        await walkAndCollect(full, out, re, depth + 1);
+      } else if (e.isFile()) {
+        if (re.test(e.name)) {
+          const relativePath = full
+            .replace(root, "")
+            .replace(/^[\\\/]/, "")
+            .replace(/\\/g, "/");
+          out.push(relativePath);
+        }
       }
     } catch (err) {
-      // ignore
+      // ignore individual file/dir errors
     }
   }
+
+  // Remove inode from visited set when leaving this directory
+  // This allows visiting the same inode through different paths (if legitimate)
+  visitedInodes.delete(inode);
 };
 
 /**
- * Check if build script exists (placeholder)
+ * Check if build script exists
  */
 const checkBuildScript = async (): Promise<CheckResult> => {
   const pkgPath = path.join(root, "package.json");

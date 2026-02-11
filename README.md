@@ -1,4 +1,12 @@
-﻿# Security Reporter — Quick Install & Run
+﻿# License: MIT © Erik Sturesson
+
+# 🛡️ Security Reporter
+
+> Security and quality reporter for Node.js projects
+
+![npm version](https://img.shields.io/npm/v/@eriksturesson%2Fsecurity-reporter)
+![npm downloads (monthly)](https://img.shields.io/npm/dm/@eriksturesson%2Fsecurity-reporter)
+![npm license](https://img.shields.io/npm/l/@eriksturesson%2Fsecurity-reporter)
 
 Security Reporter is a local CLI tool that scans a repository for common security and quality issues and writes human- and machine-readable reports to `reports/`.
 
@@ -39,15 +47,6 @@ Security notes (short):
 - If you must publish this package to npm, follow the public checklist in `README_PUBLIC.md` and remove `private` only when ready.
 
 Want a public-ready guide or contribution guidelines? See `README_PUBLIC.md`, `CONTRIBUTING.md`, and `SECURITY.md`.
-
-License: MIT © Erik Sturesson
-
-# 🛡️ Security Reporter
-
-> Security and quality reporter for Node.js projects
-
-[![npm version](https://img.shields.io/npm/v/security-reporter.svg)](https://www.npmjs.com/package/security-reporter)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 Security Reporter is a comprehensive security and quality scanning tool for Node.js projects. It performs security audits, scans for secrets, validates dependencies, and generates detailed reports in multiple formats (terminal, JSON, Markdown, PDF).
 
