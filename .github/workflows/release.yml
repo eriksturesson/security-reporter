@@ -21,8 +21,7 @@ jobs:
         with:
           node-version: "18"
           cache: "npm"
-          registry-url: "https://npm.pkg.github.com"
-          scope: "@eriksturesson"
+          registry-url: "https://registry.npmjs.org"
 
       - name: Install Chromium (for puppeteer-core)
         run: |
@@ -53,13 +52,12 @@ jobs:
           asset_name: sbom-${{ github.sha }}.xml
           asset_content_type: application/xml
 
-      - name: Configure npm auth for GitHub Packages
+      - name: Configure npm auth for npmjs.com
         run: |
-          echo "@eriksturesson:registry=https://npm.pkg.github.com" > ~/.npmrc
-          echo "//npm.pkg.github.com/:_authToken=${{ secrets.GITHUB_TOKEN }}" >> ~/.npmrc
+          echo "//registry.npmjs.org/:_authToken=${{ secrets.NPM_TOKEN }}" > ~/.npmrc
 
-      - name: Publish to GitHub Packages
+      - name: Publish to npmjs.com
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
-          npm publish --registry https://npm.pkg.github.com
+          npm publish --registry https://registry.npmjs.org
