@@ -413,7 +413,17 @@ const checkEnvFiles = async (projectType: ProjectType): Promise<CheckResult> => 
   const issues: string[] = [];
   const warnings: string[] = [];
 
-  const envFiles = [".env", ".env.local", ".env.development", ".env.production"];
+  const envFiles = [
+    ".env",
+    ".env.local",
+    ".env.development",
+    ".env.development.local",
+    ".env.production",
+    ".env.production.local",
+    ".env.test",
+    ".env.test.local",
+  ];
+
   const foundEnvFiles: string[] = [];
 
   envFiles.forEach((envFile) => {

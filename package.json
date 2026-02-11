@@ -1,6 +1,6 @@
 {
   "name": "security-reporter",
-  "version": "1.0.2",
+  "version": "1.0.4",
   "description": "Security and quality reporter for Node.js projects. Scans for vulnerabilities, secrets, outdated dependencies, and generates comprehensive reports (console, Markdown, PDF).",
   "license": "MIT",
   "keywords": [

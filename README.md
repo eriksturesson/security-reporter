@@ -26,9 +26,9 @@ Sedan:
 npm run security-reporter
 ```
 
-![npm version](https://img.shields.io/npm/v/@eriksturesson%2Fsecurity-reporter)
-![npm downloads (monthly)](https://img.shields.io/npm/dm/@eriksturesson%2Fsecurity-reporter)
-![npm license](https://img.shields.io/npm/l/@eriksturesson%2Fsecurity-reporter)
+![npm version](https://img.shields.io/npm/v/security-reporter)
+![npm downloads (monthly)](https://img.shields.io/npm/dm/security-reporter)
+![npm license](https://img.shields.io/npm/l/security-reporter)
 
 Security Reporter is a local CLI tool that scans a repository for common security and quality issues and writes human- and machine-readable reports to `reports/`.
 

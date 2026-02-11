@@ -2,7 +2,14 @@ import { spawn } from "child_process";
 import { SecurityConfig, CheckResult, ProjectType } from "../../interfaces/Types";
 import * as fs from "fs";
 import * as path from "path";
-import type { SpawnOptions as NodeSpawnOptions } from "child_process";
+
+/**
+ * Get the actual project root where user ran the command
+ * When running via npx, use INIT_CWD instead of cwd()
+ */
+const getProjectRoot = (): string => {
+  return process.env.INIT_CWD || process.cwd();
+};
 
 /**
  * Run all security-related checks
@@ -29,7 +36,7 @@ export const runSecurityChecks = async (config: SecurityConfig, projectType: Pro
  */
 const checkPackagePublishSafety = async (): Promise<CheckResult> => {
   try {
-    const pkgPath = path.join(process.cwd(), "package.json");
+    const pkgPath = path.join(getProjectRoot(), "package.json");
     if (!fs.existsSync(pkgPath)) {
       return {
         name: "publish safety",
@@ -40,7 +47,24 @@ const checkPackagePublishSafety = async (): Promise<CheckResult> => {
     }
 
     const pkgContent = fs.readFileSync(pkgPath, "utf-8");
-    const pkg = safeParseJSON(pkgContent, "package.json");
+
+    let pkg: any;
+    try {
+      pkg = safeParseJSON(pkgContent, "package.json");
+    } catch (parseError: any) {
+      // Handle large or invalid package.json
+      if (parseError.message.includes("too large")) {
+        return {
+          name: "publish safety",
+          status: "fail",
+          severity: "error",
+          message: "package.json is too large",
+          details: parseError.message,
+          suggestions: ["Reduce package.json size", "Remove unnecessary content"],
+        };
+      }
+      throw parseError; // Re-throw other errors
+    }
 
     const suggestions: string[] = [];
     if (pkg.private === true) {
@@ -91,7 +115,7 @@ const checkPackagePublishSafety = async (): Promise<CheckResult> => {
 const checkLockfilePresence = async (): Promise<CheckResult> => {
   try {
     const lockFiles = ["package-lock.json", "yarn.lock", "pnpm-lock.yaml"];
-    const found = lockFiles.filter((f) => fs.existsSync(path.join(process.cwd(), f)));
+    const found = lockFiles.filter((f) => fs.existsSync(path.join(getProjectRoot(), f)));
 
     if (found.length === 0) {
       return {
@@ -130,7 +154,7 @@ const checkLockfilePresence = async (): Promise<CheckResult> => {
  */
 const checkNpmScripts = async (): Promise<CheckResult> => {
   try {
-    const pkgPath = path.join(process.cwd(), "package.json");
+    const pkgPath = path.join(getProjectRoot(), "package.json");
     if (!fs.existsSync(pkgPath)) {
       return {
         name: "npm scripts",
@@ -184,13 +208,26 @@ const checkNpmScripts = async (): Promise<CheckResult> => {
  */
 const checkNpmAudit = async (config: SecurityConfig): Promise<CheckResult> => {
   try {
-    const result = await spawnCommand("npx", ["npm", "audit", "--json"], {
-      shell: true,
+    const result = await spawnCommand("npm", ["audit", "--json"], {
       timeout: 30000,
       maxBuffer: 10 * 1024 * 1024,
     });
 
-    const audit = JSON.parse(result.stdout);
+    // FIX: Sanitize stdout before parsing
+    // npm audit can output warnings/errors before JSON on Windows
+    const cleanJson = sanitizeNpmOutput(result.stdout);
+
+    if (!cleanJson) {
+      return {
+        name: "npm audit",
+        status: "warn",
+        severity: "warning",
+        message: "npm audit returned empty output",
+        suggestions: ["Try running 'npm audit' manually to check for issues"],
+      };
+    }
+
+    const audit = JSON.parse(cleanJson);
 
     const vulnerabilities = audit.metadata?.vulnerabilities || {};
     const total =
@@ -223,31 +260,39 @@ const checkNpmAudit = async (config: SecurityConfig): Promise<CheckResult> => {
     // npm audit exits with code 1 if vulnerabilities found
     if (error.stdout) {
       try {
-        const audit = JSON.parse(error.stdout);
-        const vulnerabilities = audit.metadata?.vulnerabilities || {};
-        const total = Object.values(vulnerabilities).reduce((sum: number, val) => sum + (val as number), 0);
+        const cleanJson = sanitizeNpmOutput(error.stdout);
+        if (cleanJson) {
+          const audit = JSON.parse(cleanJson);
+          const vulnerabilities = audit.metadata?.vulnerabilities || {};
+          const total = Object.values(vulnerabilities).reduce((sum: number, val) => sum + (val as number), 0);
 
-        const hasHighOrCritical = vulnerabilities.high > 0 || vulnerabilities.critical > 0;
+          const hasHighOrCritical = vulnerabilities.high > 0 || vulnerabilities.critical > 0;
 
-        return {
-          name: "npm audit",
-          status: hasHighOrCritical ? "fail" : "warn",
-          severity: hasHighOrCritical ? "critical" : "warning",
-          message: `Found ${total} vulnerabilities`,
-          details: vulnerabilities,
-          suggestions: ["Run 'npm audit fix' to fix vulnerabilities"],
-        };
-      } catch {
-        // Could not parse
+          return {
+            name: "npm audit",
+            status: hasHighOrCritical ? "fail" : "warn",
+            severity: hasHighOrCritical ? "critical" : "warning",
+            message: `Found ${total} vulnerabilities`,
+            details: vulnerabilities,
+            suggestions: ["Run 'npm audit fix' to fix vulnerabilities"],
+          };
+        }
+      } catch (parseErr) {
+        // Could not parse even after sanitization
       }
     }
 
     return {
       name: "npm audit",
-      status: "fail",
-      severity: "error",
+      status: "warn",
+      severity: "warning",
       message: "Could not run npm audit",
       details: error.message,
+      suggestions: [
+        "Try running 'npm audit' manually",
+        "Ensure npm is installed and up to date",
+        "Check internet connection",
+      ],
     };
   }
 };
@@ -268,7 +313,7 @@ const checkSecrets = async (config: SecurityConfig): Promise<CheckResult> => {
 
   // FIX #3: Safe regex patterns with length limits to prevent ReDoS
   const loadPatterns = (): Array<{ name: string; pattern: RegExp }> => {
-    const cfgPath = path.join(process.cwd(), "config", "patterns.json");
+    const cfgPath = path.join(getProjectRoot(), "config", "patterns.json");
     if (fs.existsSync(cfgPath)) {
       try {
         const raw = fs.readFileSync(cfgPath, "utf-8");
@@ -302,8 +347,8 @@ const checkSecrets = async (config: SecurityConfig): Promise<CheckResult> => {
   const patterns = loadPatterns();
 
   const foundSecrets: Array<{ file: string; type: string; line: number; snippet: string; isDefinition: boolean }> = [];
-  const srcDir = path.join(process.cwd(), "src");
-  const excludeDirs = [path.join(process.cwd(), "src", "core")];
+  const srcDir = path.join(getProjectRoot(), "src");
+  const excludeDirs = [path.join(getProjectRoot(), "src", "core")];
 
   if (!fs.existsSync(srcDir)) {
     return {
@@ -317,7 +362,7 @@ const checkSecrets = async (config: SecurityConfig): Promise<CheckResult> => {
   // FIX #2: Safe directory scanning with path traversal protection
   const scanDirectory = (dir: string) => {
     const normalizedDir = path.resolve(dir);
-    const projectRoot = path.resolve(process.cwd());
+    const projectRoot = path.resolve(getProjectRoot());
 
     // FIX: Verify we're within project root
     if (!normalizedDir.startsWith(projectRoot)) {
@@ -445,6 +490,8 @@ const scanFile = (
     }
 
     const content = fs.readFileSync(filePath, "utf-8");
+    // Debug: dump small config files to help test investigation
+    // No debug dumps
     const lines = content.split(/\r?\n/);
 
     patterns.forEach(({ name, pattern }) => {
@@ -452,7 +499,16 @@ const scanFile = (
         // Reset regex lastIndex to prevent issues with global flag
         pattern.lastIndex = 0;
 
-        if (pattern.test(line)) {
+        // For debugging: show pattern test results for the test config file
+        let matched = false;
+        try {
+          matched = pattern.test(line);
+        } catch (e) {
+          matched = false;
+        }
+        // no debug pattern logging
+
+        if (matched) {
           const trimmed = line.trim();
           if (
             !trimmed.startsWith("//") &&
@@ -468,7 +524,7 @@ const scanFile = (
               /pattern\s*[:=]|new RegExp\(|const\s+patterns\b|let\s+patterns\b|var\s+patterns\b|\/.*\//.test(trimmed);
 
             foundSecrets.push({
-              file: filePath.replace(process.cwd(), ""),
+              file: filePath.replace(getProjectRoot(), ""),
               type: name,
               line: index + 1,
               snippet: line.trim().slice(0, 200),
@@ -505,40 +561,74 @@ const countFilesInDir = (dir: string): number => {
 
 /**
  * Check .env file configuration
+ * Enhanced with better .gitignore detection
  */
 const checkEnvFiles = async (projectType: ProjectType): Promise<CheckResult> => {
-  const hasEnv = fs.existsSync(path.join(process.cwd(), ".env"));
-  const hasEnvExample = fs.existsSync(path.join(process.cwd(), ".env.example"));
-  const hasGitignore = fs.existsSync(path.join(process.cwd(), ".gitignore"));
+  const root = getProjectRoot();
+
+  const hasEnv = fs.existsSync(path.join(root, ".env"));
+  const hasEnvExample = fs.existsSync(path.join(root, ".env.example"));
+  const hasGitignore = fs.existsSync(path.join(root, ".gitignore"));
 
   const issues: string[] = [];
+  const warnings: string[] = [];
 
   if (hasEnv && hasGitignore) {
-    const gitignore = fs.readFileSync(path.join(process.cwd(), ".gitignore"), "utf-8");
-    const gitignoreLines = gitignore
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .filter((line) => line && !line.startsWith("#"));
+    const gitignore = fs.readFileSync(path.join(root, ".gitignore"), "utf-8");
 
-    const isEnvIgnored = gitignoreLines.some((line) => line === ".env" || line.startsWith(".env"));
+    // Check multiple patterns for .env
+    const patterns = [
+      ".env", // Exact match
+      "/.env", // With slash
+      ".env\n", // On its own line
+      ".env\r\n", // Windows line ending
+      "\n.env", // After newline
+      "\r\n.env", // After Windows newline
+    ];
 
-    if (!isEnvIgnored) {
+    const hasEnvPattern = patterns.some((pattern) => gitignore.includes(pattern));
+
+    // Also check if there's a pattern like .env* or *.env
+    const hasEnvWildcard = /\.env\*|\.env\b/.test(gitignore);
+
+    if (!hasEnvPattern && !hasEnvWildcard) {
       issues.push(".env file not in .gitignore");
     }
   }
 
   if (hasEnv && !hasEnvExample) {
-    issues.push("Missing .env.example file for documentation");
+    warnings.push("Missing .env.example file for documentation");
+  }
+
+  if (!hasEnv && !hasGitignore) {
+    // No .env and no .gitignore - probably a fresh project
+    return {
+      name: "env files",
+      status: "pass",
+      severity: "info",
+      message: "No .env files found (project may not need them)",
+    };
   }
 
   if (issues.length > 0) {
     return {
       name: "env files",
+      status: "fail",
+      severity: "critical",
+      message: "Environment file security issues detected",
+      details: { issues, hasEnv, hasGitignore, warnings },
+      suggestions: ["Add .env to .gitignore to prevent committing secrets", "Run: echo '.env' >> .gitignore"],
+    };
+  }
+
+  if (warnings.length > 0) {
+    return {
+      name: "env files",
       status: "warn",
       severity: "warning",
-      message: "Environment file issues detected",
-      details: issues,
-      suggestions: ["Add .env to .gitignore", "Create .env.example with dummy values"],
+      message: "Environment file improvements recommended",
+      details: { warnings, hasEnv, hasEnvExample },
+      suggestions: warnings.map((w) => `Fix: ${w}`),
     };
   }
 
@@ -547,6 +637,7 @@ const checkEnvFiles = async (projectType: ProjectType): Promise<CheckResult> => 
     status: "pass",
     severity: "info",
     message: "Environment files properly configured",
+    details: { hasEnv, hasEnvExample, hasGitignore },
   };
 };
 
@@ -574,7 +665,7 @@ const checkLicenses = async (config: SecurityConfig): Promise<CheckResult> => {
     // 1. Check package.json license
     let pkgLicense: string | undefined;
     try {
-      const pkgContent = fs.readFileSync(path.join(process.cwd(), "package.json"), "utf-8");
+      const pkgContent = fs.readFileSync(path.join(getProjectRoot(), "package.json"), "utf-8");
       const pkg = safeParseJSON(pkgContent, "package.json");
       pkgLicense = pkg.license;
     } catch {
@@ -587,7 +678,7 @@ const checkLicenses = async (config: SecurityConfig): Promise<CheckResult> => {
     let licenseFileContent: string | undefined;
 
     for (const filename of licenseFiles) {
-      const filepath = path.join(process.cwd(), filename);
+      const filepath = path.join(getProjectRoot(), filename);
       if (fs.existsSync(filepath)) {
         licenseFile = filename;
         licenseFileContent = fs.readFileSync(filepath, "utf-8");
@@ -777,7 +868,7 @@ const checkSbomGeneration = async (config: SecurityConfig): Promise<CheckResult>
   }
 
   try {
-    const reportsDir = path.join(process.cwd(), "reports");
+    const reportsDir = path.join(getProjectRoot(), "reports");
 
     // FIX #7: Atomic directory creation without race condition
     try {
@@ -831,7 +922,7 @@ const checkTyposquatting = async (config: SecurityConfig): Promise<CheckResult> 
   }
 
   try {
-    const pkgPath = path.join(process.cwd(), "package.json");
+    const pkgPath = path.join(getProjectRoot(), "package.json");
     if (!fs.existsSync(pkgPath)) {
       return {
         name: "typosquatting",
@@ -874,7 +965,16 @@ const checkTyposquatting = async (config: SecurityConfig): Promise<CheckResult> 
         throw new Error(`Registry returned ${response.status}`);
       }
 
-      const info = (await response.json()) as any;
+      // Type-safe registry response
+      interface NpmRegistryResponse {
+        "dist-tags"?: {
+          latest?: string;
+        };
+        maintainers?: Array<{ name: string; email: string }>;
+        [key: string]: unknown;
+      }
+
+      const info = (await response.json()) as NpmRegistryResponse;
       const latest = info["dist-tags"]?.latest;
       const maintainers = info.maintainers || [];
 
@@ -906,6 +1006,57 @@ const checkTyposquatting = async (config: SecurityConfig): Promise<CheckResult> 
 // ============================================================================
 
 /**
+ * Sanitize npm output to extract valid JSON
+ *
+ * npm commands (especially on Windows) can output warnings/errors before JSON:
+ * - "npm WARN deprecated ..."
+ * - "npm ERR! ..."
+ * - Empty lines
+ *
+ * This function extracts only the JSON part.
+ */
+const sanitizeNpmOutput = (output: string): string | null => {
+  if (!output || output.trim().length === 0) {
+    return null;
+  }
+
+  // Split into lines
+  const lines = output.split(/\r?\n/);
+
+  // Find the first line that starts with { or [
+  let jsonStart = -1;
+  for (let i = 0; i < lines.length; i++) {
+    const trimmed = lines[i].trim();
+    if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+      jsonStart = i;
+      break;
+    }
+  }
+
+  if (jsonStart === -1) {
+    return null;
+  }
+
+  // Find the last line that ends with } or ]
+  let jsonEnd = -1;
+  for (let i = lines.length - 1; i >= jsonStart; i--) {
+    const trimmed = lines[i].trim();
+    if (trimmed.endsWith("}") || trimmed.endsWith("]")) {
+      jsonEnd = i;
+      break;
+    }
+  }
+
+  if (jsonEnd === -1) {
+    return null;
+  }
+
+  // Extract only the JSON part
+  const jsonLines = lines.slice(jsonStart, jsonEnd + 1);
+  return jsonLines.join("\n");
+};
+
+/**
  * FIX #4: Safe JSON parsing with validation
  * FIXED: Unsafe JSON.parse() from untrusted sources
  */
@@ -935,7 +1086,7 @@ const safeParseJSON = (content: string, source: string): any => {
  * FIX #1: Safe command spawning helper
  * Replaces unsafe exec() with spawn()
  */
-interface SpawnOptions extends NodeSpawnOptions {
+interface SpawnOptions {
   timeout?: number;
   maxBuffer?: number;
 }
@@ -949,7 +1100,7 @@ const spawnCommand = (
     const { timeout = 30000, maxBuffer = 10 * 1024 * 1024 } = options;
 
     const proc = spawn(command, args, {
-      cwd: process.cwd(),
+      cwd: getProjectRoot(), // Use project root, not package root
       env: process.env,
     });
 

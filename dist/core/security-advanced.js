@@ -413,7 +413,16 @@ const countFiles = (dir) => {
 const checkEnvFiles = async (projectType) => {
     const issues = [];
     const warnings = [];
-    const envFiles = [".env", ".env.local", ".env.development", ".env.production"];
+    const envFiles = [
+        ".env",
+        ".env.local",
+        ".env.development",
+        ".env.development.local",
+        ".env.production",
+        ".env.production.local",
+        ".env.test",
+        ".env.test.local",
+    ];
     const foundEnvFiles = [];
     envFiles.forEach((envFile) => {
         if (fs.existsSync(path.join(process.cwd(), envFile))) {
