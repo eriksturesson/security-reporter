@@ -287,7 +287,16 @@ const checkSecrets = async (config: SecurityConfig): Promise<CheckResult> => {
     scanDirectory(srcDir);
 
     // Also check root for .env files
-    const rootFiles = [".env", ".env.local", ".env.development", ".env.production"];
+    const rootFiles = [
+      ".env",
+      ".env.local",
+      ".env.development",
+      ".env.development.local",
+      ".env.production",
+      ".env.production.local",
+      ".env.test",
+      ".env.test.local",
+    ];
     rootFiles.forEach((envFile) => {
       const envPath = path.join(process.cwd(), envFile);
       if (fs.existsSync(envPath)) {

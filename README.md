@@ -4,6 +4,28 @@
 
 > Security and quality reporter for Node.js projects
 
+**Snabbstart:**
+
+Kör direkt:
+
+```bash
+npx security-reporter
+```
+
+Eller lägg till i package.json:
+
+```json
+"scripts": {
+  "security-reporter": "security-reporter"
+}
+```
+
+Sedan:
+
+```bash
+npm run security-reporter
+```
+
 ![npm version](https://img.shields.io/npm/v/@eriksturesson%2Fsecurity-reporter)
 ![npm downloads (monthly)](https://img.shields.io/npm/dm/@eriksturesson%2Fsecurity-reporter)
 ![npm license](https://img.shields.io/npm/l/@eriksturesson%2Fsecurity-reporter)

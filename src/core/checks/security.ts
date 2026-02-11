@@ -2,6 +2,7 @@ import { spawn } from "child_process";
 import { SecurityConfig, CheckResult, ProjectType } from "../../interfaces/Types";
 import * as fs from "fs";
 import * as path from "path";
+import type { SpawnOptions as NodeSpawnOptions } from "child_process";
 
 /**
  * Run all security-related checks
@@ -183,7 +184,8 @@ const checkNpmScripts = async (): Promise<CheckResult> => {
  */
 const checkNpmAudit = async (config: SecurityConfig): Promise<CheckResult> => {
   try {
-    const result = await spawnCommand("npm", ["audit", "--json"], {
+    const result = await spawnCommand("npx", ["npm", "audit", "--json"], {
+      shell: true,
       timeout: 30000,
       maxBuffer: 10 * 1024 * 1024,
     });
@@ -513,7 +515,14 @@ const checkEnvFiles = async (projectType: ProjectType): Promise<CheckResult> => 
 
   if (hasEnv && hasGitignore) {
     const gitignore = fs.readFileSync(path.join(process.cwd(), ".gitignore"), "utf-8");
-    if (!gitignore.includes(".env")) {
+    const gitignoreLines = gitignore
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter((line) => line && !line.startsWith("#"));
+
+    const isEnvIgnored = gitignoreLines.some((line) => line === ".env" || line.startsWith(".env"));
+
+    if (!isEnvIgnored) {
       issues.push(".env file not in .gitignore");
     }
   }
@@ -926,7 +935,7 @@ const safeParseJSON = (content: string, source: string): any => {
  * FIX #1: Safe command spawning helper
  * Replaces unsafe exec() with spawn()
  */
-interface SpawnOptions {
+interface SpawnOptions extends NodeSpawnOptions {
   timeout?: number;
   maxBuffer?: number;
 }
