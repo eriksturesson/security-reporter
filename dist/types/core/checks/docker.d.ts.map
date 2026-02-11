@@ -1,0 +1,1 @@
+{"version":3,"file":"docker.d.ts","sourceRoot":"","sources":["../../../../src/core/checks/docker.ts"],"names":[],"mappings":"AAAA,OAAO,KAAK,EAAE,WAAW,EAAE,MAAM,wBAAwB,CAAC;AAE1D,wBAAsB,oBAAoB,IAAI,OAAO,CAAC,WAAW,EAAE,CAAC,CAWnE;AAED,wBAAsB,iCAAiC,IAAI,OAAO,CAAC,WAAW,EAAE,CAAC,CAUhF;AAED,wBAAsB,iBAAiB,IAAI,OAAO,CAAC,WAAW,EAAE,CAAC,CAUhE;;;;;;AAED,wBAIE"}
