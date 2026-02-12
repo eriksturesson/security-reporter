@@ -42,8 +42,29 @@ const path = __importStar(require("path"));
  * When running via npx, use INIT_CWD instead of cwd()
  */
 const getProjectRoot = () => {
-    // Use INIT_CWD when running via npx, otherwise fallback to current working directory
-    return process.env.INIT_CWD || process.cwd();
+    // Allow explicit override for callers (useful when running as a dependency)
+    if (process.env.SECURITY_REPORT_ROOT)
+        return path.resolve(process.env.SECURITY_REPORT_ROOT);
+    // Use INIT_CWD when available (set by npm/npx), otherwise try to discover nearest package.json
+    if (process.env.INIT_CWD)
+        return process.env.INIT_CWD;
+    // Walk up from cwd looking for a package.json (stop at filesystem root)
+    let cur = process.cwd();
+    try {
+        while (true) {
+            if (fs.existsSync(path.join(cur, "package.json")) || fs.existsSync(path.join(cur, ".git"))) {
+                return cur;
+            }
+            const parent = path.dirname(cur);
+            if (!parent || parent === cur)
+                break;
+            cur = parent;
+        }
+    }
+    catch (e) {
+        // fallback to cwd
+    }
+    return process.cwd();
 };
 /**
  * Run all security-related checks

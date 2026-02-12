@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.0.7] - 2026-02-12
+
+### Changed
+
+- Improve root detection and logging (work in progress): the tool now attempts to detect the true project root more robustly (supports `INIT_CWD`, walks up from `cwd`, and accepts `SECURITY_REPORT_ROOT` environment override). This should help when running from other repositories where `.env` or `package.json` previously were not discovered. Validation of this behavior across all external consumer repos is still in progress.
+
+- More informative reporting for critical errors: terminal output now shows file paths for secret matches while masking sensitive snippets. For more detailed logs and full context, please review the generated reports in `/reports`.
+
 ## [1.0.6] - 2026-02-12
 
 ### Fixed

@@ -162,6 +162,31 @@ const reportToTerminal = (report) => {
 };
 exports.reportToTerminal = reportToTerminal;
 /**
+ * Mask quoted secrets inside a snippet string leaving short prefix/suffix for context
+ */
+const maskSnippet = (snippet) => {
+    if (!snippet || typeof snippet !== "string")
+        return String(snippet);
+    // Replace quoted long sequences (e.g. "AIzaSy...") keeping first 4 and last 4 chars
+    return snippet.replace(/(["'])([^"']{8,})\1/g, (_m, quote, inner) => {
+        const head = inner.slice(0, 4);
+        const tail = inner.slice(-4);
+        return `${quote}${head}...${tail}${quote}`;
+    });
+};
+/**
+ * Safely stringify an object while masking any long quoted values
+ */
+const maskObjectString = (obj) => {
+    try {
+        const json = JSON.stringify(obj, null, 2);
+        return maskSnippet(json);
+    }
+    catch (e) {
+        return String(obj);
+    }
+};
+/**
  * Display check with full details (for critical/errors)
  */
 const displayCheckDetailed = (check, options) => {
@@ -193,7 +218,34 @@ const displayCheckDetailed = (check, options) => {
             Object.entries(check.details)
                 .slice(0, 3)
                 .forEach(([key, value]) => {
-                console.log(`        ├─ ${key}: ${value}`);
+                // If 'matches' is an array of found secrets, print file, line and a masked snippet
+                if (key === "matches" && Array.isArray(value)) {
+                    const items = value;
+                    items.slice(0, 5).forEach((m, i) => {
+                        const prefix = i === items.length - 1 ? "        └─" : "        ├─";
+                        const file = m.file || m.path || "<unknown>";
+                        const line = m.line ? `:${m.line}` : "";
+                        const type = m.type ? ` (${m.type})` : "";
+                        const snippet = m.snippet ? ` — ${maskSnippet(String(m.snippet))}` : "";
+                        console.log(`${prefix} ${file}${line}${type}${snippet}`);
+                    });
+                    if (value.length > 5) {
+                        console.log(`        └─ ... and ${value.length - 5} more`);
+                    }
+                }
+                else if (Array.isArray(value)) {
+                    // Generic array of simple details
+                    const repr = value.slice(0, 5).map((v) => (typeof v === "string" ? maskSnippet(v) : maskObjectString(v)));
+                    console.log(`        ├─ ${key}: ${repr.join(", ")}`);
+                    if (value.length > 5)
+                        console.log(`        └─ ... and ${value.length - 5} more`);
+                }
+                else if (typeof value === "object") {
+                    console.log(`        ├─ ${key}: ${maskObjectString(value)}`);
+                }
+                else {
+                    console.log(`        ├─ ${key}: ${maskSnippet(String(value))}`);
+                }
             });
         }
         else {
