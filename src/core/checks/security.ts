@@ -8,6 +8,7 @@ import * as path from "path";
  * When running via npx, use INIT_CWD instead of cwd()
  */
 const getProjectRoot = (): string => {
+  // Use INIT_CWD when running via npx, otherwise fallback to current working directory
   return process.env.INIT_CWD || process.cwd();
 };
 
@@ -218,6 +219,12 @@ const checkNpmAudit = async (config: SecurityConfig): Promise<CheckResult> => {
     const cleanJson = sanitizeNpmOutput(result.stdout);
 
     if (!cleanJson) {
+      // Debug: Log what we got
+      if (process.env.DEBUG) {
+        console.log("[DEBUG] npm audit stdout:", result.stdout.substring(0, 500));
+        console.log("[DEBUG] npm audit stderr:", result.stderr.substring(0, 500));
+      }
+
       return {
         name: "npm audit",
         status: "warn",
@@ -351,6 +358,13 @@ const checkSecrets = async (config: SecurityConfig): Promise<CheckResult> => {
   const excludeDirs = [path.join(getProjectRoot(), "src", "core")];
 
   if (!fs.existsSync(srcDir)) {
+    if (process.env.DEBUG) {
+      console.log("[DEBUG] src directory not found at:", srcDir);
+      console.log("[DEBUG] Project root:", getProjectRoot());
+      console.log("[DEBUG] process.cwd():", process.cwd());
+      console.log("[DEBUG] INIT_CWD:", process.env.INIT_CWD);
+    }
+
     return {
       name: "secrets scan",
       status: "skip",
@@ -490,8 +504,6 @@ const scanFile = (
     }
 
     const content = fs.readFileSync(filePath, "utf-8");
-    // Debug: dump small config files to help test investigation
-    // No debug dumps
     const lines = content.split(/\r?\n/);
 
     patterns.forEach(({ name, pattern }) => {
@@ -499,16 +511,7 @@ const scanFile = (
         // Reset regex lastIndex to prevent issues with global flag
         pattern.lastIndex = 0;
 
-        // For debugging: show pattern test results for the test config file
-        let matched = false;
-        try {
-          matched = pattern.test(line);
-        } catch (e) {
-          matched = false;
-        }
-        // no debug pattern logging
-
-        if (matched) {
+        if (pattern.test(line)) {
           const trimmed = line.trim();
           if (
             !trimmed.startsWith("//") &&
