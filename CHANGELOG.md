@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.0.6] - 2026-02-12
+
+### Fixed
+
+- Removed `README_PUBLIC.md`
+- Removed `FEATURE.md`
+- Removed `COMPLETE_SETUP_GUIDE.md`
+- Updated `README.md` (shortened/public notes moved)
+- Renamed npm script: `security-report` → `security-reporter`
+
 ## [1.0.5] - 2026-02-12
 
 ### Fixed

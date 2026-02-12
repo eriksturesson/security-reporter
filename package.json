@@ -1,6 +1,6 @@
 {
   "name": "security-reporter",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "description": "Security and quality reporter for Node.js projects. Scans for vulnerabilities, secrets, outdated dependencies, and generates comprehensive reports (console, Markdown, PDF).",
   "license": "MIT",
   "keywords": [
@@ -49,9 +49,9 @@
   "homepage": "https://github.com/eriksturesson/security-reporter",
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "security-report": "node ./dist/cli.js",
-    "report": "npm run security-report",
-    "start": "npm run security-report",
+    "security-reporter": "node ./dist/cli.js",
+    "report": "npm run security-reporter",
+    "start": "npm run security-reporter",
     "dev": "ts-node src/cli.ts",
     "test": "vitest",
     "lint": "echo \"No linter configured yet\" && exit 0"
