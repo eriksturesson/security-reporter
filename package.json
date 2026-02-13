@@ -1,6 +1,6 @@
 {
   "name": "security-reporter",
-  "version": "1.0.8",
+  "version": "1.0.9",
   "description": "Security and quality reporter for Node.js projects. Scans for vulnerabilities, secrets, outdated dependencies, and generates comprehensive reports (console, Markdown, PDF).",
   "license": "MIT",
   "keywords": [
@@ -60,12 +60,12 @@
   "dependencies": {
     "chalk": "^4.1.2",
     "commander": "^11.1.0",
-    "dotenv": "^16.5.0"
+    "dotenv": "^16.5.0",
+    "puppeteer": "^24.37.2"
   },
   "devDependencies": {
     "@types/node": "^22.19.8",
     "depcheck": "^1.4.7",
-    "puppeteer-core": "^24.37.2",
     "ts-node": "^10.9.1",
     "typescript": "^5.3.0",
     "vitest": "^4.0.18"

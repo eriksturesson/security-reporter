@@ -14,7 +14,15 @@ All notable changes to this project will be documented in this file.
 
 - Improve root detection and logging (work in progress): the tool now attempts to detect the true project root more robustly (supports `INIT_CWD`, walks up from `cwd`, and accepts `SECURITY_REPORT_ROOT` environment override). This should help when running from other repositories where `.env` or `package.json` previously were not discovered. Validation of this behavior across all external consumer repos is still in progress.
 
-- More informative reporting for critical errors: terminal output now shows file paths for secret matches while masking sensitive snippets. For more detailed logs and full context, please review the generated reports in `/reports`.
+## [1.0.9] - 2026-02-13
+
+### Fixed
+
+- PDF report generation: PDFs are now always produced. Previously PDFs were only created if Puppeteer was installed optionally; the PDF generator is now bundled with this package.
+
+- npm audit: Execution and parsing fixed since the last release. The report now surfaces detected vulnerabilities and additionally recommends running `npm audit fix` to attempt automated remediation.
+
+## [1.0.7] - 2026-02-12
 
 ## [1.0.6] - 2026-02-12
 
