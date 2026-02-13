@@ -271,13 +271,58 @@ const checkNpmAudit = async (config: SecurityConfig): Promise<CheckResult> => {
 
     const hasHighOrCritical = vulnerabilities.high > 0 || vulnerabilities.critical > 0;
 
+    // Build detailed vulnerability list
+    const vulnDetails: string[] = [];
+    if (vulnerabilities.critical > 0) {
+      vulnDetails.push(`🔴 ${vulnerabilities.critical} critical`);
+    }
+    if (vulnerabilities.high > 0) {
+      vulnDetails.push(`🟠 ${vulnerabilities.high} high`);
+    }
+    if (vulnerabilities.moderate > 0) {
+      vulnDetails.push(`🟡 ${vulnerabilities.moderate} moderate`);
+    }
+    if (vulnerabilities.low > 0) {
+      vulnDetails.push(`🔵 ${vulnerabilities.low} low`);
+    }
+    if (vulnerabilities.info > 0) {
+      vulnDetails.push(`ℹ️  ${vulnerabilities.info} info`);
+    }
+
+    // Extract affected packages if available
+    const affectedPackages: string[] = [];
+    if (audit.vulnerabilities) {
+      Object.entries(audit.vulnerabilities).forEach(([pkg, data]: [string, any]) => {
+        if (data.via && Array.isArray(data.via)) {
+          data.via.forEach((via: any) => {
+            if (via.title) {
+              affectedPackages.push(`  • ${pkg}: ${via.title} (${via.severity || "unknown"})`);
+            }
+          });
+        } else if (data.severity) {
+          affectedPackages.push(`  • ${pkg} (${data.severity})`);
+        }
+      });
+    }
+
     return {
       name: "npm audit",
       status: hasHighOrCritical ? "fail" : "warn",
       severity: hasHighOrCritical ? "critical" : "warning",
-      message: `Found ${total} vulnerabilities`,
-      details: vulnerabilities,
-      suggestions: ["Run 'npm audit fix' to fix vulnerabilities"],
+      message: `Found ${total} vulnerabilities: ${vulnDetails.join(", ")}`,
+      details:
+        affectedPackages.length > 0
+          ? {
+              vulnerabilities,
+              affected: affectedPackages.slice(0, 10), // Show max 10
+              total: affectedPackages.length,
+            }
+          : vulnerabilities,
+      suggestions: [
+        "Run 'npm audit fix' to automatically fix vulnerabilities",
+        affectedPackages.length > 10 ? `Showing 10 of ${affectedPackages.length} affected packages` : undefined,
+        hasHighOrCritical ? "⚠️  CRITICAL/HIGH vulnerabilities require immediate attention!" : undefined,
+      ].filter(Boolean) as string[],
     };
   } catch (error: any) {
     // Handle spawn errors (e.g., command not found)
@@ -318,13 +363,34 @@ const checkNpmAudit = async (config: SecurityConfig): Promise<CheckResult> => {
 
           const hasHighOrCritical = vulnerabilities.high > 0 || vulnerabilities.critical > 0;
 
+          // Build detailed vulnerability list
+          const vulnDetails: string[] = [];
+          if (vulnerabilities.critical > 0) {
+            vulnDetails.push(`🔴 ${vulnerabilities.critical} critical`);
+          }
+          if (vulnerabilities.high > 0) {
+            vulnDetails.push(`🟠 ${vulnerabilities.high} high`);
+          }
+          if (vulnerabilities.moderate > 0) {
+            vulnDetails.push(`🟡 ${vulnerabilities.moderate} moderate`);
+          }
+          if (vulnerabilities.low > 0) {
+            vulnDetails.push(`🔵 ${vulnerabilities.low} low`);
+          }
+          if (vulnerabilities.info > 0) {
+            vulnDetails.push(`ℹ️  ${vulnerabilities.info} info`);
+          }
+
           return {
             name: "npm audit",
             status: hasHighOrCritical ? "fail" : "warn",
             severity: hasHighOrCritical ? "critical" : "warning",
-            message: `Found ${total} vulnerabilities`,
+            message: `Found ${total} vulnerabilities: ${vulnDetails.join(", ")}`,
             details: vulnerabilities,
-            suggestions: ["Run 'npm audit fix' to fix vulnerabilities"],
+            suggestions: [
+              "Run 'npm audit fix' to automatically fix vulnerabilities",
+              hasHighOrCritical ? "⚠️  CRITICAL/HIGH vulnerabilities require immediate attention!" : undefined,
+            ].filter(Boolean) as string[],
           };
         }
       } catch {
