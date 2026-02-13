@@ -42,29 +42,7 @@ const path = __importStar(require("path"));
  * When running via npx, use INIT_CWD instead of cwd()
  */
 const getProjectRoot = () => {
-    // Allow explicit override for callers (useful when running as a dependency)
-    if (process.env.SECURITY_REPORT_ROOT)
-        return path.resolve(process.env.SECURITY_REPORT_ROOT);
-    // Use INIT_CWD when available (set by npm/npx), otherwise try to discover nearest package.json
-    if (process.env.INIT_CWD)
-        return process.env.INIT_CWD;
-    // Walk up from cwd looking for a package.json (stop at filesystem root)
-    let cur = process.cwd();
-    try {
-        while (true) {
-            if (fs.existsSync(path.join(cur, "package.json")) || fs.existsSync(path.join(cur, ".git"))) {
-                return cur;
-            }
-            const parent = path.dirname(cur);
-            if (!parent || parent === cur)
-                break;
-            cur = parent;
-        }
-    }
-    catch (e) {
-        // fallback to cwd
-    }
-    return process.cwd();
+    return process.env.INIT_CWD || process.cwd();
 };
 /**
  * Run all security-related checks
@@ -249,30 +227,45 @@ const checkNpmScripts = async () => {
  * FIXED: Command injection vulnerability
  */
 const checkNpmAudit = async (config) => {
-    var _a, _b;
+    var _a, _b, _c, _d;
     try {
         const result = await spawnCommand("npm", ["audit", "--json"], {
             timeout: 30000,
             maxBuffer: 10 * 1024 * 1024,
         });
         // FIX: Sanitize stdout before parsing
-        // npm audit can output warnings/errors before JSON on Windows
         const cleanJson = sanitizeNpmOutput(result.stdout);
         if (!cleanJson) {
-            // Debug: Log what we got
-            if (process.env.DEBUG) {
-                console.log("[DEBUG] npm audit stdout:", result.stdout.substring(0, 500));
-                console.log("[DEBUG] npm audit stderr:", result.stderr.substring(0, 500));
+            console.log("\n[DEBUG] npm audit returned no valid JSON");
+            console.log("[DEBUG] Raw output:", result.stdout.substring(0, 300));
+            return {
+                name: "npm audit",
+                status: "skip",
+                severity: "info",
+                message: "npm audit could not run (no package-lock.json?)",
+                suggestions: ["Run 'npm install' to create package-lock.json"],
+            };
+        }
+        const audit = JSON.parse(cleanJson);
+        // Check if it's an error response
+        if (audit.error) {
+            if (audit.error.code === "ENOLOCK") {
+                return {
+                    name: "npm audit",
+                    status: "skip",
+                    severity: "info",
+                    message: "No package-lock.json found",
+                    suggestions: ["Run 'npm install' to create package-lock.json"],
+                };
             }
             return {
                 name: "npm audit",
                 status: "warn",
                 severity: "warning",
-                message: "npm audit returned empty output",
-                suggestions: ["Try running 'npm audit' manually to check for issues"],
+                message: `npm audit error: ${audit.error.summary || audit.error.code}`,
+                suggestions: ["Run 'npm audit' manually to see details"],
             };
         }
-        const audit = JSON.parse(cleanJson);
         const vulnerabilities = ((_a = audit.metadata) === null || _a === void 0 ? void 0 : _a.vulnerabilities) || {};
         const total = (vulnerabilities.info || 0) +
             (vulnerabilities.low || 0) +
@@ -298,13 +291,37 @@ const checkNpmAudit = async (config) => {
         };
     }
     catch (error) {
+        // Handle spawn errors (e.g., command not found)
+        if (error.code === "ENOENT" || ((_b = error.message) === null || _b === void 0 ? void 0 : _b.includes("ENOENT"))) {
+            return {
+                name: "npm audit",
+                status: "skip",
+                severity: "info",
+                message: "npm command not found",
+                suggestions: [
+                    "Ensure npm is installed: npm --version",
+                    "On Windows, you may need to restart your terminal",
+                    "Run 'npm audit' manually if needed",
+                ],
+            };
+        }
         // npm audit exits with code 1 if vulnerabilities found
         if (error.stdout) {
             try {
                 const cleanJson = sanitizeNpmOutput(error.stdout);
                 if (cleanJson) {
                     const audit = JSON.parse(cleanJson);
-                    const vulnerabilities = ((_b = audit.metadata) === null || _b === void 0 ? void 0 : _b.vulnerabilities) || {};
+                    // Check for error response
+                    if (((_c = audit.error) === null || _c === void 0 ? void 0 : _c.code) === "ENOLOCK") {
+                        return {
+                            name: "npm audit",
+                            status: "skip",
+                            severity: "info",
+                            message: "No package-lock.json found",
+                            suggestions: ["Run 'npm install' to create package-lock.json"],
+                        };
+                    }
+                    const vulnerabilities = ((_d = audit.metadata) === null || _d === void 0 ? void 0 : _d.vulnerabilities) || {};
                     const total = Object.values(vulnerabilities).reduce((sum, val) => sum + val, 0);
                     const hasHighOrCritical = vulnerabilities.high > 0 || vulnerabilities.critical > 0;
                     return {
@@ -317,7 +334,7 @@ const checkNpmAudit = async (config) => {
                     };
                 }
             }
-            catch (parseErr) {
+            catch {
                 // Could not parse even after sanitization
             }
         }
@@ -327,11 +344,7 @@ const checkNpmAudit = async (config) => {
             severity: "warning",
             message: "Could not run npm audit",
             details: error.message,
-            suggestions: [
-                "Try running 'npm audit' manually",
-                "Ensure npm is installed and up to date",
-                "Check internet connection",
-            ],
+            suggestions: ["Try running 'npm audit' manually", "Ensure npm is installed and up to date"],
         };
     }
 };
@@ -638,11 +651,8 @@ const checkLicenses = async (config) => {
             name: "licenses",
             status: "skip",
             severity: "info",
-            message: "License checking disabled (no allowedLicenses configured)",
-            suggestions: [
-                'Add "allowedLicenses": ["MIT", "Apache-2.0", "BSD-3-Clause"] to .securityrc.json',
-                "Run: security-reporter init to create config",
-            ],
+            message: "Not configured",
+            suggestions: ['Add "allowedLicenses": ["MIT", "Apache-2.0", "BSD-3-Clause"] to .securityrc.json'],
         };
     }
     try {
@@ -804,7 +814,7 @@ const checkPublishDryRun = async (config) => {
             name: "publish dry-run",
             status: "skip",
             severity: "info",
-            message: "Publish dry-run disabled (set security.publishDryRun=true to enable)",
+            message: "Not configured",
         };
     }
     try {
@@ -838,7 +848,7 @@ const checkSbomGeneration = async (config) => {
             name: "sbom",
             status: "skip",
             severity: "info",
-            message: "SBOM generation disabled (set security.generateSbom=true to enable)",
+            message: "Not configured",
         };
     }
     try {
@@ -889,7 +899,7 @@ const checkTyposquatting = async (config) => {
             name: "typosquatting",
             status: "skip",
             severity: "info",
-            message: "Registry checks disabled (set security.checkRegistry=true to enable)",
+            message: "Not configured",
         };
     }
     try {
@@ -972,6 +982,14 @@ const sanitizeNpmOutput = (output) => {
     if (!output || output.trim().length === 0) {
         return null;
     }
+    // Try parsing directly first (most common case)
+    try {
+        JSON.parse(output);
+        return output; // Already valid JSON
+    }
+    catch {
+        // Continue to sanitization
+    }
     // Split into lines
     const lines = output.split(/\r?\n/);
     // Find the first line that starts with { or [
@@ -1000,7 +1018,15 @@ const sanitizeNpmOutput = (output) => {
     }
     // Extract only the JSON part
     const jsonLines = lines.slice(jsonStart, jsonEnd + 1);
-    return jsonLines.join("\n");
+    const result = jsonLines.join("\n");
+    // Verify it's actually valid JSON
+    try {
+        JSON.parse(result);
+        return result;
+    }
+    catch {
+        return null;
+    }
 };
 /**
  * FIX #4: Safe JSON parsing with validation
@@ -1027,9 +1053,13 @@ const safeParseJSON = (content, source) => {
 const spawnCommand = (command, args, options = {}) => {
     return new Promise((resolve, reject) => {
         const { timeout = 30000, maxBuffer = 10 * 1024 * 1024 } = options;
-        const proc = (0, child_process_1.spawn)(command, args, {
-            cwd: getProjectRoot(), // Use project root, not package root
+        // FIX: Windows needs .cmd extension and shell for npm
+        const isWindows = process.platform === "win32";
+        const cmd = isWindows && command === "npm" ? "npm.cmd" : command;
+        const proc = (0, child_process_1.spawn)(cmd, args, {
+            cwd: getProjectRoot(),
             env: process.env,
+            shell: isWindows, // Use shell on Windows to resolve .cmd files
         });
         let stdout = "";
         let stderr = "";

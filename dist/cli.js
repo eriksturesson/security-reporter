@@ -111,6 +111,7 @@ commander_1.program
     .option("--no-tests", "Skip test checks")
     .option("--pdf", "Generate PDF report (requires markdown format)")
     .action(async (options) => {
+    var _a;
     try {
         // FIX #6: Validate project type input
         if (options.projectType) {
@@ -168,13 +169,18 @@ commander_1.program
                     console.log(`✅ HTML report saved to ${savedPath}`);
                     // Try to generate PDF from HTML if puppeteer is available
                     try {
+                        console.log("📄 Creating PDF report...");
                         const { savePdfFromHtml } = await Promise.resolve().then(() => __importStar(require("./core/pdf-reporter")));
                         const pdfPath = path.join(reportsDir, `security-report.pdf`);
                         const savedPdf = await savePdfFromHtml(savedPath, pdfPath);
                         console.log(`✅ PDF report saved to ${savedPdf}`);
                     }
                     catch (pdfErr) {
-                        console.log("ℹ️  PDF generation skipped (install 'puppeteer' to enable)");
+                        // Only show error if it's NOT a "module not found" error (puppeteer missing)
+                        if (pdfErr.code !== "MODULE_NOT_FOUND" && !((_a = pdfErr.message) === null || _a === void 0 ? void 0 : _a.includes("Cannot find module"))) {
+                            console.log(`⚠️  PDF generation failed: ${pdfErr.message}`);
+                        }
+                        // Silently skip if puppeteer not installed
                     }
                 }
                 catch (e) {

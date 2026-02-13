@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.0.8] - 2026-02-13
+
+### Fix
+
+- Now `npm audit` should work as part of the script
+
 ## [1.0.7] - 2026-02-12
 
 ### Changed
@@ -85,3 +91,16 @@ All notable changes to this project will be documented in this file.
 ---
 
 Further changes will be recorded here following Keep a Changelog conventions.
+
+## [1.0.9] - 2026-02-13
+
+### Added
+
+- PDF report generation: create a printable, shareable PDF alongside the existing JSON and HTML reports.
+
+### Changed
+
+- Removed `puppeteer` as an optional runtime dependency. The PDF generator no longer requires users to install `puppeteer` separately — the package now uses a lighter built-in path for PDF creation.
+- Updated documentation (README) to highlight the new PDF output and simplified install instructions for beginners.
+
+---

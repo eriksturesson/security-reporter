@@ -1,6 +1,6 @@
 {
   "name": "security-reporter",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "description": "Security and quality reporter for Node.js projects. Scans for vulnerabilities, secrets, outdated dependencies, and generates comprehensive reports (console, Markdown, PDF).",
   "license": "MIT",
   "keywords": [
@@ -44,7 +44,8 @@
   "files": [
     "dist",
     "README.md",
-    "CHANGELOG.md"
+    "CHANGELOG.md",
+    "SECURITY.md"
   ],
   "homepage": "https://github.com/eriksturesson/security-reporter",
   "scripts": {

@@ -158,12 +158,17 @@ program
 
             // Try to generate PDF from HTML if puppeteer is available
             try {
+              console.log("📄 Creating PDF report...");
               const { savePdfFromHtml } = await import("./core/pdf-reporter");
               const pdfPath = path.join(reportsDir, `security-report.pdf`);
               const savedPdf = await savePdfFromHtml(savedPath, pdfPath);
               console.log(`✅ PDF report saved to ${savedPdf}`);
-            } catch (pdfErr) {
-              console.log("ℹ️  PDF generation skipped (install 'puppeteer' to enable)");
+            } catch (pdfErr: any) {
+              // Only show error if it's NOT a "module not found" error (puppeteer missing)
+              if (pdfErr.code !== "MODULE_NOT_FOUND" && !pdfErr.message?.includes("Cannot find module")) {
+                console.log(`⚠️  PDF generation failed: ${pdfErr.message}`);
+              }
+              // Silently skip if puppeteer not installed
             }
           } catch (e) {
             // ignore HTML generation errors here
