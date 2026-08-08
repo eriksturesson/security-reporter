@@ -1,15 +1,9 @@
-import { spawn } from "child_process";
 import { SecurityConfig, CheckResult, ProjectType } from "../../interfaces/Types";
 import * as fs from "fs";
 import * as path from "path";
-
-/**
- * Get the actual project root where user ran the command
- * When running via npx, use INIT_CWD instead of cwd()
- */
-const getProjectRoot = (): string => {
-  return process.env.INIT_CWD || process.cwd();
-};
+import { getProjectRoot } from "../utils/project-root";
+import { walkProjectFiles, countProjectFiles, SOURCE_FILE_EXTENSIONS } from "../utils/fs-scanner";
+import { spawnCommand, sanitizeNpmOutput, safeParseJSON } from "../utils/process";
 
 /**
  * Run all security-related checks
@@ -459,76 +453,26 @@ const checkSecrets = async (config: SecurityConfig): Promise<CheckResult> => {
   const patterns = loadPatterns();
 
   const foundSecrets: Array<{ file: string; type: string; line: number; snippet: string; isDefinition: boolean }> = [];
-  const srcDir = path.join(getProjectRoot(), "src");
-  const excludeDirs = [path.join(getProjectRoot(), "src", "core")];
+  const projectRoot = getProjectRoot();
 
-  if (!fs.existsSync(srcDir)) {
-    if (process.env.DEBUG) {
-      console.log("[DEBUG] src directory not found at:", srcDir);
-      console.log("[DEBUG] Project root:", getProjectRoot());
-      console.log("[DEBUG] process.cwd():", process.cwd());
-      console.log("[DEBUG] INIT_CWD:", process.env.INIT_CWD);
-    }
-
+  if (!fs.existsSync(projectRoot)) {
     return {
       name: "secrets scan",
       status: "skip",
       severity: "info",
-      message: "No src directory found",
+      message: "Project root could not be resolved",
     };
   }
 
-  // FIX #2: Safe directory scanning with path traversal protection
-  const scanDirectory = (dir: string) => {
-    const normalizedDir = path.resolve(dir);
-    const projectRoot = path.resolve(getProjectRoot());
-
-    // FIX: Verify we're within project root
-    if (!normalizedDir.startsWith(projectRoot)) {
-      console.warn(`[Security] Attempted to scan outside project: ${dir}`);
-      return;
-    }
-
-    let entries;
-    try {
-      entries = fs.readdirSync(dir, { withFileTypes: true });
-    } catch (err) {
-      // Skip inaccessible directories
-      return;
-    }
-
-    entries.forEach((entry) => {
-      const filePath = path.join(dir, entry.name);
-      const resolvedPath = path.resolve(filePath);
-
-      // FIX: Skip symlinks to prevent traversal attacks
-      if (entry.isSymbolicLink()) {
-        return;
-      }
-
-      // FIX: Double-check resolved path is still within project
-      if (!resolvedPath.startsWith(projectRoot)) {
-        console.warn(`[Security] Skipping file outside project: ${filePath}`);
-        return;
-      }
-
-      // Skip scanning our own core scanner files to avoid false positives
-      if (excludeDirs.some((d) => filePath.startsWith(d))) {
-        return;
-      }
-
-      if (entry.isDirectory()) {
-        if (!entry.name.startsWith(".") && entry.name !== "node_modules") {
-          scanDirectory(filePath);
-        }
-      } else if (entry.name.match(/\.(ts|js|jsx|tsx|json)$/)) {
-        scanFile(filePath, patterns, foundSecrets);
-      }
-    });
-  };
-
   try {
-    scanDirectory(srcDir);
+    // Scan the whole project (not just a `src/` folder — many real-world
+    // projects use app/, lib/, a flat root, or monorepo packages/*).
+    // Path traversal, symlink-following and depth protections live in
+    // walkProjectFiles itself.
+    walkProjectFiles(projectRoot, {
+      extensions: SOURCE_FILE_EXTENSIONS,
+      onFile: (filePath) => scanFile(filePath, patterns, foundSecrets),
+    });
 
     if (foundSecrets.length > 0) {
       const defs = foundSecrets.filter((s) => s.isDefinition);
@@ -573,7 +517,7 @@ const checkSecrets = async (config: SecurityConfig): Promise<CheckResult> => {
       severity: "info",
       message: "No hardcoded secrets found",
       details: {
-        filesScanned: countFilesInDir(srcDir),
+        filesScanned: countProjectFiles(projectRoot, SOURCE_FILE_EXTENSIONS),
         patternsChecked: patterns.length,
       },
     };
@@ -645,26 +589,6 @@ const scanFile = (
   } catch (err) {
     // Skip files that can't be read
   }
-};
-
-/**
- * Helper: Count files in directory
- */
-const countFilesInDir = (dir: string): number => {
-  let count = 0;
-  try {
-    const entries = fs.readdirSync(dir, { withFileTypes: true });
-    entries.forEach((entry) => {
-      if (entry.isDirectory() && entry.name !== "node_modules" && !entry.name.startsWith(".")) {
-        count += countFilesInDir(path.join(dir, entry.name));
-      } else if (entry.isFile() && entry.name.match(/\.(ts|js|jsx|tsx|json)$/)) {
-        count++;
-      }
-    });
-  } catch (err) {
-    // Ignore errors
-  }
-  return count;
 };
 
 /**
@@ -1106,180 +1030,3 @@ const checkTyposquatting = async (config: SecurityConfig): Promise<CheckResult> 
   }
 };
 
-// ============================================================================
-// UTILITY FUNCTIONS - Security Helpers
-// ============================================================================
-
-/**
- * Sanitize npm output to extract valid JSON
- *
- * npm commands (especially on Windows) can output warnings/errors before JSON:
- * - "npm WARN deprecated ..."
- * - "npm ERR! ..."
- * - Empty lines
- *
- * This function extracts only the JSON part.
- */
-const sanitizeNpmOutput = (output: string): string | null => {
-  if (!output || output.trim().length === 0) {
-    return null;
-  }
-
-  // Try parsing directly first (most common case)
-  try {
-    JSON.parse(output);
-    return output; // Already valid JSON
-  } catch {
-    // Continue to sanitization
-  }
-
-  // Split into lines
-  const lines = output.split(/\r?\n/);
-
-  // Find the first line that starts with { or [
-  let jsonStart = -1;
-  for (let i = 0; i < lines.length; i++) {
-    const trimmed = lines[i].trim();
-    if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
-      jsonStart = i;
-      break;
-    }
-  }
-
-  if (jsonStart === -1) {
-    return null;
-  }
-
-  // Find the last line that ends with } or ]
-  let jsonEnd = -1;
-  for (let i = lines.length - 1; i >= jsonStart; i--) {
-    const trimmed = lines[i].trim();
-    if (trimmed.endsWith("}") || trimmed.endsWith("]")) {
-      jsonEnd = i;
-      break;
-    }
-  }
-
-  if (jsonEnd === -1) {
-    return null;
-  }
-
-  // Extract only the JSON part
-  const jsonLines = lines.slice(jsonStart, jsonEnd + 1);
-  const result = jsonLines.join("\n");
-
-  // Verify it's actually valid JSON
-  try {
-    JSON.parse(result);
-    return result;
-  } catch {
-    return null;
-  }
-};
-
-/**
- * FIX #4: Safe JSON parsing with validation
- * FIXED: Unsafe JSON.parse() from untrusted sources
- */
-const MAX_JSON_SIZE = 1024 * 1024; // 1MB
-
-const safeParseJSON = (content: string, source: string): any => {
-  // Check size
-  if (content.length > MAX_JSON_SIZE) {
-    throw new Error(`${source} is too large (${content.length} bytes, max ${MAX_JSON_SIZE})`);
-  }
-
-  try {
-    const parsed = JSON.parse(content);
-
-    // Validate it's an object
-    if (typeof parsed !== "object" || parsed === null) {
-      throw new Error(`${source} must contain a JSON object`);
-    }
-
-    return parsed;
-  } catch (error: any) {
-    throw new Error(`Failed to parse ${source}: ${error.message}`);
-  }
-};
-
-/**
- * FIX #1: Safe command spawning helper
- * Replaces unsafe exec() with spawn()
- */
-interface SpawnOptions {
-  timeout?: number;
-  maxBuffer?: number;
-}
-
-const spawnCommand = (
-  command: string,
-  args: string[],
-  options: SpawnOptions = {},
-): Promise<{ stdout: string; stderr: string; code: number }> => {
-  return new Promise((resolve, reject) => {
-    const { timeout = 30000, maxBuffer = 10 * 1024 * 1024 } = options;
-
-    // FIX: Windows needs .cmd extension and shell for npm
-    const isWindows = process.platform === "win32";
-    const cmd = isWindows && command === "npm" ? "npm.cmd" : command;
-
-    const proc = spawn(cmd, args, {
-      cwd: getProjectRoot(),
-      env: process.env,
-      shell: isWindows, // Use shell on Windows to resolve .cmd files
-    });
-
-    let stdout = "";
-    let stderr = "";
-    let killed = false;
-
-    // Set timeout
-    const timer = setTimeout(() => {
-      killed = true;
-      proc.kill();
-      reject(new Error(`Command timed out after ${timeout}ms`));
-    }, timeout);
-
-    proc.stdout.on("data", (data) => {
-      stdout += data.toString();
-      if (stdout.length > maxBuffer) {
-        killed = true;
-        proc.kill();
-        reject(new Error(`Output exceeded maxBuffer (${maxBuffer} bytes)`));
-      }
-    });
-
-    proc.stderr.on("data", (data) => {
-      stderr += data.toString();
-      if (stderr.length > maxBuffer) {
-        killed = true;
-        proc.kill();
-        reject(new Error(`Error output exceeded maxBuffer (${maxBuffer} bytes)`));
-      }
-    });
-
-    proc.on("close", (code) => {
-      clearTimeout(timer);
-      if (!killed) {
-        if (code === 0 || code === 1) {
-          // npm audit returns 1 if vulnerabilities found
-          resolve({ stdout, stderr, code: code || 0 });
-        } else {
-          const error: any = new Error(`Command failed with exit code ${code}`);
-          error.stdout = stdout;
-          error.stderr = stderr;
-          error.code = code;
-          reject(error);
-        }
-      }
-    });
-
-    proc.on("error", (err) => {
-      clearTimeout(timer);
-      if (!killed) {
-        reject(err);
-      }
-    });
-  });
-};

@@ -1,31 +1,74 @@
 "use strict";
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.runDockerChecks = void 0;
+const fs = __importStar(require("fs"));
+const path = __importStar(require("path"));
+const project_root_1 = require("../utils/project-root");
+const DOCKERFILE_CANDIDATES = ["Dockerfile", "dockerfile", "Dockerfile.dev", "Dockerfile.prod"];
 /**
- * Run all Docker-related checks
+ * Run all Docker-related checks. A project without a Dockerfile is not an
+ * error — Docker checks simply don't apply, so the whole group is skipped.
  */
 const runDockerChecks = async (config) => {
-    // Check if Dockerfile exists
-    // In a real implementation, you'd check the filesystem
-    const hasDockerfile = false; // placeholder
-    if (!hasDockerfile) {
+    const root = (0, project_root_1.getProjectRoot)();
+    const dockerfilePath = DOCKERFILE_CANDIDATES.map((name) => path.join(root, name)).find((p) => fs.existsSync(p));
+    if (!dockerfilePath) {
         return [
             {
                 name: "docker",
                 status: "skip",
                 severity: "info",
-                message: "No Dockerfile found - Docker checks skipped",
+                message: "No Dockerfile found at project root — Docker checks skipped",
             },
         ];
     }
-    const checks = [checkDockerfileEnvVars(config), checkDockerignore(), checkDockerBuildArgs(config)];
+    const dockerfileContent = fs.readFileSync(dockerfilePath, "utf-8");
+    const checks = [
+        checkDockerfileEnvVars(config, dockerfileContent, dockerfilePath),
+        checkDockerignore(root, dockerfileContent),
+        checkDockerBuildArgs(dockerfileContent),
+    ];
     return Promise.all(checks);
 };
 exports.runDockerChecks = runDockerChecks;
 /**
- * Check Dockerfile env vars (placeholder)
+ * Look for secret-shaped values hardcoded in ENV/ARG instructions, and flag
+ * missing default NODE_ENV / required env vars from config.
  */
-const checkDockerfileEnvVars = async (config) => {
+const checkDockerfileEnvVars = async (config, content, dockerfilePath) => {
     if (config.checkEnvInBuild === false) {
         return {
             name: "docker env vars",
@@ -34,36 +77,124 @@ const checkDockerfileEnvVars = async (config) => {
             message: "Docker env vars check disabled",
         };
     }
+    const lines = content.split(/\r?\n/);
+    const suspicious = [];
+    const secretNamePattern = /(PASSWORD|SECRET|TOKEN|API_KEY|PRIVATE_KEY|ACCESS_KEY)/i;
+    lines.forEach((line, index) => {
+        const trimmed = line.trim();
+        const envMatch = trimmed.match(/^(?:ENV|ARG)\s+([A-Za-z0-9_]+)[\s=]+(.+)$/i);
+        if (!envMatch)
+            return;
+        const [, name, rawValue] = envMatch;
+        const value = rawValue.replace(/^["']|["']$/g, "").trim();
+        if (secretNamePattern.test(name) && value.length > 0 && !value.startsWith("$")) {
+            suspicious.push(`Line ${index + 1}: "${name}" looks like a hardcoded secret`);
+        }
+    });
+    const requiredEnvVars = config.requiredEnvVars || [];
+    const missingRequired = requiredEnvVars.filter((name) => !new RegExp(`\\b${name}\\b`).test(content));
+    if (suspicious.length > 0) {
+        return {
+            name: "docker env vars",
+            status: "fail",
+            severity: "critical",
+            message: `Found ${suspicious.length} potentially hardcoded secret(s) in ${path.basename(dockerfilePath)}`,
+            details: { suspicious },
+            suggestions: [
+                "Pass secrets at runtime (docker run -e / --env-file), not baked into the image",
+                "Use Docker BuildKit secret mounts (--mount=type=secret) for build-time secrets",
+            ],
+        };
+    }
+    if (missingRequired.length > 0) {
+        return {
+            name: "docker env vars",
+            status: "warn",
+            severity: "warning",
+            message: `Missing expected environment variable(s): ${missingRequired.join(", ")}`,
+            details: { missingRequired },
+            suggestions: [`Add ENV or ARG entries for: ${missingRequired.join(", ")}`],
+        };
+    }
     return {
         name: "docker env vars",
         status: "pass",
         severity: "info",
-        message: "Docker ENV validation placeholder",
-        suggestions: ["Check .env is not copied into Docker image", "Use ARG for build-time variables"],
+        message: "No hardcoded secrets detected in Docker ENV/ARG instructions",
     };
 };
 /**
- * Check .dockerignore (placeholder)
+ * .dockerignore existence and coverage of the usual footguns.
  */
-const checkDockerignore = async () => {
+const checkDockerignore = async (root, dockerfileContent) => {
+    const dockerignorePath = path.join(root, ".dockerignore");
+    if (!fs.existsSync(dockerignorePath)) {
+        return {
+            name: "dockerignore",
+            status: "warn",
+            severity: "warning",
+            message: "No .dockerignore file found",
+            suggestions: ["Create .dockerignore excluding node_modules, .env, .git, and reports/"],
+        };
+    }
+    const content = fs.readFileSync(dockerignorePath, "utf-8");
+    const expected = ["node_modules", ".env", ".git"];
+    const missing = expected.filter((entry) => !content.includes(entry));
+    const copiesEverything = /^COPY\s+\.\s+\./m.test(dockerfileContent) || /^COPY\s+\.\s+[^\s]/m.test(dockerfileContent);
+    if (missing.length > 0 && copiesEverything) {
+        return {
+            name: "dockerignore",
+            status: "fail",
+            severity: "error",
+            message: `.dockerignore is missing entries that Dockerfile's "COPY . ." would otherwise include: ${missing.join(", ")}`,
+            details: { missing },
+            suggestions: missing.map((m) => `Add "${m}" to .dockerignore`),
+        };
+    }
+    if (missing.length > 0) {
+        return {
+            name: "dockerignore",
+            status: "warn",
+            severity: "warning",
+            message: `.dockerignore is missing recommended entries: ${missing.join(", ")}`,
+            details: { missing },
+            suggestions: missing.map((m) => `Add "${m}" to .dockerignore`),
+        };
+    }
     return {
         name: "dockerignore",
         status: "pass",
         severity: "info",
-        message: "Dockerignore placeholder",
-        suggestions: ["Ensure .dockerignore includes node_modules, .env, .git"],
+        message: ".dockerignore covers node_modules, .env, and .git",
     };
 };
 /**
- * Check Docker build args (placeholder)
+ * ARG statements with default values that look like real credentials.
  */
-const checkDockerBuildArgs = async (config) => {
+const checkDockerBuildArgs = async (content) => {
+    const argLines = content
+        .split(/\r?\n/)
+        .map((l) => l.trim())
+        .filter((l) => /^ARG\s+/i.test(l));
+    const risky = argLines.filter((l) => /(PASSWORD|SECRET|TOKEN|KEY)\s*=\s*\S+/i.test(l));
+    if (risky.length > 0) {
+        return {
+            name: "docker build args",
+            status: "warn",
+            severity: "warning",
+            message: `Found ${risky.length} ARG instruction(s) with default values that look like credentials`,
+            details: { risky },
+            suggestions: [
+                "Don't set default values for secret-shaped ARGs — require them to be passed explicitly",
+                "Prefer BuildKit secret mounts over ARG for anything sensitive (ARG values persist in image history)",
+            ],
+        };
+    }
     return {
         name: "docker build args",
         status: "pass",
         severity: "info",
-        message: "Docker build args placeholder",
-        suggestions: ["Provide default values for ARG statements"],
+        message: argLines.length > 0 ? `${argLines.length} ARG instruction(s) checked, no obvious secrets` : "No ARG instructions found",
     };
 };
 //# sourceMappingURL=docker.js.map

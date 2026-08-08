@@ -9,14 +9,28 @@ import type { SecurityConfig, TestConfig, CheckResult, ValidationReport } from "
 
 // Test utilities
 let testDir: string;
+let originalInitCwd: string | undefined;
 
 beforeEach(() => {
   // Create temporary test directory
   testDir = fs.mkdtempSync(path.join(os.tmpdir(), "security-test-"));
   process.chdir(testDir);
+
+  // getProjectRoot() prefers INIT_CWD when set, which npm/npx always sets
+  // (to the repo root) for any `npm test`/`npx vitest` invocation. Without
+  // pinning it to the temp dir here, checks would silently scan this real
+  // repo instead of the isolated fixture directory, regardless of chdir().
+  originalInitCwd = process.env.INIT_CWD;
+  process.env.INIT_CWD = testDir;
 });
 
 afterEach(() => {
+  if (originalInitCwd === undefined) {
+    delete process.env.INIT_CWD;
+  } else {
+    process.env.INIT_CWD = originalInitCwd;
+  }
+
   // Cleanup
   try {
     fs.rmSync(testDir, { recursive: true, force: true });

@@ -43,10 +43,17 @@ npm run report
 - `reports/security-report.html` — human-friendly HTML
 - `reports/security-report.pdf` — printable PDF
 
+3. See how a project trends over time, or get an overview across every repo you've scanned on this machine:
+
+```bash
+npx security-reporter dashboard
+```
+
 Highlights
 
-- Local scans: `npm audit`, secret scanning, dependency and license checks
+- Local scans across the **whole project** (not just a `src/` folder — works with `app/`, `lib/`, flat repos, and monorepos): `npm audit`, secret scanning, dependency and license checks, unused/duplicate/outdated dependency analysis, circular import detection, and Dockerfile checks when a Dockerfile is present.
 - Outputs: terminal, JSON, HTML and PDF
+- **Cross-repo history**: every scan is recorded locally (counts only, never file contents or secrets) so `security-reporter dashboard` can show every project you've scanned, its last status, and the trend since its previous scan. Opt out per-run with `--no-history`, or point the history store elsewhere with `SECURITY_REPORTER_HOME`.
 - Scans run locally by default; no data is transmitted externally. `.env` and other potential secrets are scanned locally and masked in reports.
 
   Note: optional registry/network checks are disabled by default. Some underlying tools (for example `npm audit`) may contact the npm registry when run.

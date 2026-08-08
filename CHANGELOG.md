@@ -2,6 +2,32 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.1.0] - 2026-08-08
+
+### Fixed
+
+- **Secret scanning, unused-dependency detection, and circular-dependency detection now cover the whole project instead of only a `src/` folder.** Previously these checks silently skipped everything when a project used `app/`, `lib/`, a flat layout, or a monorepo `packages/*/src` structure — the most common cause of "checks don't seem to run in my other repos". The secrets scanner also dropped a leftover self-exclusion of a `src/core` folder that only made sense when scanning security-reporter's own repo.
+- **Docker checks now actually check the filesystem.** `hasDockerfile` was previously hardcoded to `false`, so Docker checks always silently skipped even when a Dockerfile existed. They now detect `Dockerfile`/`.dockerignore`, flag hardcoded-looking secrets in `ENV`/`ARG` instructions, and verify `.dockerignore` covers `node_modules`/`.env`/`.git`.
+- **Quality checks (unused/duplicate/outdated/peer dependencies) were placeholders that always reported "pass" without doing any work.** They're now real, backed by `depcheck` for unused-dependency analysis and `npm ls`/`npm outdated` (via `spawn`, not `exec`) for the rest.
+- Fixed an inconsistency where some checks resolved the project root via `process.cwd()` and others via `INIT_CWD`, which could disagree depending on how the tool was invoked (global install, `npx`, or as a local devDependency). All checks now share one `getProjectRoot()` resolver, with a new `SECURITY_REPORT_ROOT` environment variable to override it explicitly when needed.
+- `--pdf` no longer only works with `--format markdown` (and no longer points at the unrelated, uninstalled `markdown-pdf` package). PDF generation is now decoupled from the chosen output format.
+- `security-reporter --version` reported a hardcoded `1.0.0` no matter which version was actually installed. It now reads the real version from the package.
+- `npm run build` didn't clean `dist/` first, so stale output from old tsconfig layouts (`dist/test/`, `dist/types/`) kept shipping in every published tarball. `build` now cleans `dist/` before compiling.
+
+### Added
+
+- **Cross-repo scan history.** Every scan is recorded locally under `~/.security-reporter/history` (aggregate counts only — never file contents, paths, or secret values). Run `security-reporter dashboard` (alias: `history`) to see every project scanned on this machine, its last status, and how it's trending. Each scan also prints a one-line trend (`+2 failed, -1 warnings since last scan on ...`) compared to its previous run. Opt out per-run with `--no-history`, or relocate the store with the `SECURITY_REPORTER_HOME` environment variable.
+- Real circular-dependency detection: builds an import graph from relative `import`/`require` specifiers across the project and reports actual cycles, instead of a placeholder that only suggested installing `madge`.
+
+### Removed
+
+- Deleted `src/core/security-advanced.ts` and `src/core/quality-advanced.ts` — an earlier, unused implementation (nothing imported them) that duplicated logic now implemented in `src/core/checks/*`, including some of the same command-injection and path-traversal issues already fixed there.
+- Removed a stray debug script (`test-npm-audit.js`) from the repo root that wasn't wired into any npm script.
+
+### Testing
+
+- Added coverage for the new/previously-untested code: the shared file-walker's path-traversal and symlink protections, Docker checks (Dockerfile/`.dockerignore` detection, secret-shaped `ENV`/`ARG` detection), and the history/dashboard module (including that only aggregate counts — never check names, messages, or file paths — are ever written to the local history store).
+
 ## [1.0.9] - 2026-02-13
 
 ### Fixed

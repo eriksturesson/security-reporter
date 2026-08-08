@@ -38,6 +38,8 @@ const commander_1 = require("commander");
 const validators_1 = require("./core/validators");
 const reporter_1 = require("./core/reporter");
 const html_reporter_1 = require("./core/html-reporter");
+const history_1 = require("./core/history");
+const project_root_1 = require("./core/utils/project-root");
 const fs = __importStar(require("fs"));
 const path = __importStar(require("path"));
 // FIX #6: Validate input - Valid values
@@ -79,8 +81,9 @@ const loadConfig = () => {
         "security-reporter.config.json",
         "security-reporter.config.js",
     ];
+    const root = (0, project_root_1.getProjectRoot)();
     for (const configPath of configPaths) {
-        const fullPath = path.join(process.cwd(), configPath);
+        const fullPath = path.join(root, configPath);
         if (fs.existsSync(fullPath)) {
             try {
                 if (configPath.endsWith(".js")) {
@@ -95,11 +98,47 @@ const loadConfig = () => {
     }
     return {};
 };
+/**
+ * Generate the HTML + PDF reports from a ValidationReport. Used both when
+ * the user asks for --format html and when --pdf is passed alongside any
+ * other format, so PDF generation no longer depends on which format was
+ * chosen for the primary output.
+ */
+const generateHtmlAndPdf = async (report, reportsDir) => {
+    var _a;
+    const htmlPath = path.join(reportsDir, "security-report.html");
+    const savedHtmlPath = (0, html_reporter_1.saveHtmlReport)(report, htmlPath);
+    console.log(`✅ HTML report saved to ${savedHtmlPath}`);
+    try {
+        console.log("📄 Creating PDF report...");
+        const { savePdfFromHtml } = await Promise.resolve().then(() => __importStar(require("./core/pdf-reporter")));
+        const pdfPath = path.join(reportsDir, "security-report.pdf");
+        const savedPdfPath = await savePdfFromHtml(savedHtmlPath, pdfPath);
+        console.log(`✅ PDF report saved to ${savedPdfPath}`);
+        return { htmlPath: savedHtmlPath, pdfPath: savedPdfPath };
+    }
+    catch (pdfErr) {
+        if (pdfErr.code !== "MODULE_NOT_FOUND" && !((_a = pdfErr.message) === null || _a === void 0 ? void 0 : _a.includes("Cannot find module"))) {
+            console.log(`⚠️  PDF generation failed: ${pdfErr.message}`);
+        }
+        return { htmlPath: savedHtmlPath };
+    }
+};
+/** Read this tool's own version from its package.json (not the scanned project's). */
+const getToolVersion = () => {
+    try {
+        const pkgPath = path.join(__dirname, "..", "package.json");
+        return JSON.parse(fs.readFileSync(pkgPath, "utf-8")).version || "0.0.0";
+    }
+    catch {
+        return "0.0.0";
+    }
+};
 // CLI setup
 commander_1.program
     .name("security-reporter")
     .description("Security and quality reporter for Node.js projects. Scans for vulnerabilities, secrets, and quality issues.")
-    .version("1.0.0")
+    .version(getToolVersion())
     .option("-c, --config <path>", "Path to config file")
     .option("-p, --project-type <type>", `Project type: ${VALID_PROJECT_TYPES.join(", ")}`)
     .option("-f, --format <format>", `Output format: ${VALID_FORMATS.join(", ")}`, "json")
@@ -109,9 +148,9 @@ commander_1.program
     .option("--no-quality", "Skip quality checks")
     .option("--no-docker", "Skip Docker checks")
     .option("--no-tests", "Skip test checks")
-    .option("--pdf", "Generate PDF report (requires markdown format)")
+    .option("--pdf", "Generate PDF report regardless of --format")
+    .option("--no-history", "Don't record this run in the local cross-repo scan history")
     .action(async (options) => {
-    var _a;
     try {
         // FIX #6: Validate project type input
         if (options.projectType) {
@@ -140,8 +179,9 @@ commander_1.program
         // Run validation
         console.log("🚀 Starting security scan...\n");
         const report = await (0, validators_1.runValidation)(config);
+        const projectRoot = (0, project_root_1.getProjectRoot)();
         // FIX #7: Atomic directory creation without race condition
-        const reportsDir = path.join(process.cwd(), "reports");
+        const reportsDir = path.join(projectRoot, "reports");
         try {
             fs.mkdirSync(reportsDir, { recursive: true });
         }
@@ -150,6 +190,7 @@ commander_1.program
                 console.warn(`Could not create reports directory: ${err.message}`);
             }
         }
+        let pdfAlreadyGenerated = false;
         // Output report based on format
         if (format === "json" || format === "all") {
             const json = (0, reporter_1.reportToJson)(report);
@@ -162,30 +203,9 @@ commander_1.program
                 const defaultJsonPath = path.join(reportsDir, `security-report.json`);
                 fs.writeFileSync(defaultJsonPath, json);
                 console.log(`\n✅ JSON report saved to ${defaultJsonPath}`);
-                // Also generate HTML alongside JSON for default runs
-                try {
-                    const defaultHtmlPath = path.join(reportsDir, `security-report.html`);
-                    const savedPath = (0, html_reporter_1.saveHtmlReport)(report, defaultHtmlPath);
-                    console.log(`✅ HTML report saved to ${savedPath}`);
-                    // Try to generate PDF from HTML if puppeteer is available
-                    try {
-                        console.log("📄 Creating PDF report...");
-                        const { savePdfFromHtml } = await Promise.resolve().then(() => __importStar(require("./core/pdf-reporter")));
-                        const pdfPath = path.join(reportsDir, `security-report.pdf`);
-                        const savedPdf = await savePdfFromHtml(savedPath, pdfPath);
-                        console.log(`✅ PDF report saved to ${savedPdf}`);
-                    }
-                    catch (pdfErr) {
-                        // Only show error if it's NOT a "module not found" error (puppeteer missing)
-                        if (pdfErr.code !== "MODULE_NOT_FOUND" && !((_a = pdfErr.message) === null || _a === void 0 ? void 0 : _a.includes("Cannot find module"))) {
-                            console.log(`⚠️  PDF generation failed: ${pdfErr.message}`);
-                        }
-                        // Silently skip if puppeteer not installed
-                    }
-                }
-                catch (e) {
-                    // ignore HTML generation errors here
-                }
+                // Also generate HTML (+ PDF) alongside JSON for default runs
+                await generateHtmlAndPdf(report, reportsDir);
+                pdfAlreadyGenerated = true;
             }
         }
         if (format === "markdown" || format === "all") {
@@ -194,17 +214,19 @@ commander_1.program
             const mdPath = outputPath.endsWith(".md") ? outputPath : `${outputPath}.md`;
             fs.writeFileSync(mdPath, markdown);
             console.log(`\n✅ Markdown report saved to ${mdPath}`);
-            if (options.pdf) {
-                console.log("\n💡 To convert to PDF, install markdown-pdf: npm install -g markdown-pdf");
-                console.log(`   Then run: markdown-pdf ${mdPath}`);
-            }
         }
         if (format === "html" || format === "all") {
-            const outputPath = options.output ? options.output : path.join(reportsDir, `security-report.html`);
-            const htmlPath = outputPath.endsWith(".html") ? outputPath : `${outputPath}.html`;
-            const savedPath = (0, html_reporter_1.saveHtmlReport)(report, htmlPath);
-            console.log(`\n✅ HTML report saved to ${savedPath}`);
-            console.log(`   Open in browser: file://${path.resolve(savedPath)}`);
+            if (!pdfAlreadyGenerated) {
+                await generateHtmlAndPdf(report, reportsDir);
+                pdfAlreadyGenerated = true;
+            }
+            console.log(`   Open in browser: file://${path.resolve(path.join(reportsDir, "security-report.html"))}`);
+        }
+        // If --pdf was explicitly requested but the chosen format didn't already produce one
+        // (e.g. --format markdown --pdf, or --format terminal --pdf), generate it now.
+        if (options.pdf && !pdfAlreadyGenerated) {
+            await generateHtmlAndPdf(report, reportsDir);
+            pdfAlreadyGenerated = true;
         }
         // Always show terminal report for live feedback
         try {
@@ -212,6 +234,20 @@ commander_1.program
         }
         catch (e) {
             // ignore terminal rendering errors
+        }
+        // Record this run in the local cross-repo history (opt-out via --no-history)
+        if (options.history !== false) {
+            try {
+                const { entry, previous } = (0, history_1.recordRun)(report, projectRoot);
+                const trend = (0, history_1.formatTrend)(entry, previous);
+                if (trend) {
+                    console.log(`📈 Trend: ${trend}`);
+                }
+            }
+            catch (e) {
+                // Never let history recording fail the scan itself
+                console.warn(`⚠️  Could not record scan history: ${e.message}`);
+            }
         }
         // Notify about reports directory when files are generated
         if (fs.existsSync(reportsDir)) {
@@ -239,7 +275,7 @@ commander_1.program
     .command("init")
     .description("Create a security-reporter config file")
     .action(() => {
-    const configPath = path.join(process.cwd(), ".securityrc.json");
+    const configPath = path.join((0, project_root_1.getProjectRoot)(), ".securityrc.json");
     if (fs.existsSync(configPath)) {
         console.log("⚠️  Config file already exists!");
         return;
@@ -273,6 +309,21 @@ commander_1.program
     console.log("✅ Created .securityrc.json");
     console.log("\n💡 Edit the file to customize your security checks");
     console.log("\n📚 Reference: https://cheatsheetseries.owasp.org/cheatsheets/NPM_Security_Cheat_Sheet.html");
+});
+// Dashboard command: cross-repo scan history
+commander_1.program
+    .command("dashboard")
+    .alias("history")
+    .description("Show scan history across all projects scanned on this machine")
+    .option("--json", "Output raw JSON instead of a formatted table")
+    .action((options) => {
+    const projects = (0, history_1.listAllProjects)();
+    if (options.json) {
+        console.log(JSON.stringify(projects, null, 2));
+        return;
+    }
+    const professional = process.env.SECURITY_REPORT_PROFESSIONAL === "1" || process.env.SECURITY_REPORT_PROFESSIONAL === "true";
+    console.log("\n" + (0, history_1.formatDashboard)(projects, { professional }));
 });
 commander_1.program.parse();
 //# sourceMappingURL=cli.js.map
